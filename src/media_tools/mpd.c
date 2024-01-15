@@ -3738,9 +3738,9 @@ static GF_Err gf_mpd_write_m3u8_playlist(const GF_MPD *mpd, const GF_MPD_Period 
 		//PART-HOLD-BACK is REQUIRED if the Playlist contains the EXT-X-PART-INF tag
 		//we use the recommended (should) PART-TARGET x 3
 		if (mpd->llhls_part_holdback>0) {
-			gf_fprintf(out,"#EXT-X-SERVER-CONTROL:PART-HOLD-BACK=%g\n", mpd->llhls_part_holdback);
+			gf_fprintf(out,"#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=%g\n", mpd->llhls_part_holdback);
 		} else {
-			gf_fprintf(out,"#EXT-X-SERVER-CONTROL:PART-HOLD-BACK=%g\n", 3 * max_part_dur_session);
+			gf_fprintf(out,"#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=%g\n", 3 * max_part_dur_session);
 		}
 		gf_fprintf(out,"#EXT-X-PART-INF:PART-TARGET=%g\n", rep->hls_ll_part_dur);
 	}
@@ -4444,6 +4444,30 @@ GF_Err gf_mpd_write(GF_MPD const * const mpd, FILE *out, Bool compact)
 		gf_fprintf(out, "</ServiceDescription>");
 		gf_mpd_lf(out, indent);
 	}
+
+    if (1) {
+        gf_mpd_extensible_print_nodes(out, mpd->x_children, indent, &child_idx, GF_FALSE);
+        gf_mpd_nl(out, indent+1);
+        gf_fprintf(out, "<ServiceDescription id=\"0\">");
+
+        gf_mpd_lf(out, indent);
+
+        gf_mpd_nl(out, indent+2);
+        gf_fprintf(out, "<Latency max=\"6000\" min=\"2000\" referenceId=\"0\" target=\"4000\"/>");
+        gf_mpd_lf(out, indent);
+
+        gf_mpd_nl(out, indent+2);
+        gf_fprintf(out, "<PlaybackRate max=\"1.00\" min=\"1.00\"/>");
+        gf_mpd_lf(out, indent);
+
+        gf_mpd_nl(out, indent+2);
+        gf_fprintf(out, "<Scope schemeIdUri=\"urn:dvb:dash:lowlatency:scope:2019\" />");
+        gf_mpd_lf(out, indent);
+
+
+        gf_fprintf(out, "</ServiceDescription>");
+        gf_mpd_lf(out, indent);
+    }
 
 	/*
 		i=0;

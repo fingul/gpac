@@ -4429,32 +4429,39 @@ GF_Err gf_mpd_write(GF_MPD const * const mpd, FILE *out, Bool compact)
 		gf_mpd_lf(out, indent);
 	}
 
-	if (mpd->inject_service_desc) {
-		gf_mpd_extensible_print_nodes(out, mpd->x_children, indent, &child_idx, GF_FALSE);
-		gf_mpd_nl(out, indent+1);
-		gf_fprintf(out, "<ServiceDescription id=\"0\">");
-		gf_mpd_lf(out, indent);
-		gf_mpd_nl(out, indent+2);
-		gf_fprintf(out, "<Latency max=\"6000\" min=\"2000\" referenceId=\"0\" target=\"4000\"/>");
-		gf_mpd_lf(out, indent);
-		gf_mpd_nl(out, indent+2);
-		gf_fprintf(out, "<PlaybackRate max=\"1.04\" min=\"0.96\"/>");
-		gf_mpd_lf(out, indent);
-		gf_mpd_nl(out, indent+1);
-		gf_fprintf(out, "</ServiceDescription>");
-		gf_mpd_lf(out, indent);
-	}
+	// if (mpd->inject_service_desc) {
+	// 	gf_mpd_extensible_print_nodes(out, mpd->x_children, indent, &child_idx, GF_FALSE);
+	// 	gf_mpd_nl(out, indent+1);
+	// 	gf_fprintf(out, "<ServiceDescription id=\"0\">");
+	// 	gf_mpd_lf(out, indent);
+	// 	gf_mpd_nl(out, indent+2);
+	// 	gf_fprintf(out, "<Latency max=\"6000\" min=\"2000\" referenceId=\"0\" target=\"4000\"/>");
+	// 	gf_mpd_lf(out, indent);
+	// 	gf_mpd_nl(out, indent+2);
+	// 	gf_fprintf(out, "<PlaybackRate max=\"1.04\" min=\"0.96\"/>");
+	// 	gf_mpd_lf(out, indent);
+	// 	gf_mpd_nl(out, indent+1);
+	// 	gf_fprintf(out, "</ServiceDescription>");
+	// 	gf_mpd_lf(out, indent);
+	// }
+	
+	//fingul
 
-    if (1) {
+	// printf("mpd->inject_service_desc=%d\n", mpd->inject_service_desc);
+	// printf("mpd->profiles=%s\n", mpd->profiles);
+
+	
+
+	if (mpd->inject_service_desc) {
         gf_mpd_extensible_print_nodes(out, mpd->x_children, indent, &child_idx, GF_FALSE);
         gf_mpd_nl(out, indent+1);
         gf_fprintf(out, "<ServiceDescription id=\"0\">");
 
         gf_mpd_lf(out, indent);
 
-        gf_mpd_nl(out, indent+2);
-        gf_fprintf(out, "<Latency max=\"6000\" min=\"2000\" referenceId=\"0\" target=\"4000\"/>");
-        gf_mpd_lf(out, indent);
+        // gf_mpd_nl(out, indent+2);
+        // gf_fprintf(out, "<Latency max=\"6000\" min=\"2000\" referenceId=\"0\" target=\"4000\"/>");
+        // gf_mpd_lf(out, indent);
 
         gf_mpd_nl(out, indent+2);
         gf_fprintf(out, "<PlaybackRate max=\"1.00\" min=\"1.00\"/>");

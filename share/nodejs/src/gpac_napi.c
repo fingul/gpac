@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2021-2023
+ *			Copyright (c) Telecom ParisTech 2021-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / NodeJS module
@@ -290,6 +290,16 @@ napi_value gpac_set_rmt_fun(napi_env env, napi_callback_info info)
 	napi_create_reference(env, argv[0], 1, &gpac->rmt_ref);
 	return NULL;
 }
+
+napi_value gpac_rmt_log(napi_env env, napi_callback_info info)
+{
+	NARG_ARGS(1, 1)
+	NARG_STR(msg, 0, NULL);
+	if (msg)
+		gf_sys_profiler_log(msg);
+	return NULL;
+}
+
 napi_value gpac_rmt_send(napi_env env, napi_callback_info info)
 {
 	NARG_ARGS(1, 1)
@@ -942,7 +952,7 @@ napi_value filterpck_set_prop(napi_env env, napi_callback_info info)
 	if (p4cc) {
 		e = gf_filter_pck_set_property(pck, p4cc, is_null ? NULL : &p);
 	} else {
-		e = gf_filter_pck_set_property_str(pck, pname, is_null ? NULL : &p);
+		e = gf_filter_pck_set_property_dyn(pck, pname, is_null ? NULL : &p);
 	}
 	if (e) {
 		napi_throw_error(env, gf_error_to_string(e), "Cannot set packet property");
@@ -1232,9 +1242,9 @@ napi_value filterpid_set_prop_internal(napi_env env, napi_callback_info info, Bo
 		}
 	} else {
 		if (is_info) {
-			e = gf_filter_pid_set_info_str(pid, pname, is_null ? NULL : &p);
+			e = gf_filter_pid_set_info_dyn(pid, pname, is_null ? NULL : &p);
 		} else {
-			e = gf_filter_pid_set_property_str(pid, pname, is_null ? NULL : &p);
+			e = gf_filter_pid_set_property_dyn(pid, pname, is_null ? NULL : &p);
 		}
 	}
 	if (e) {
@@ -2011,11 +2021,91 @@ napi_value filter_insert(napi_env env, napi_callback_info info)
 	NARG_STR(link_ext, (u32)offset, NULL);
 
 	e = gf_filter_set_source(f, ins_f, link_ext);
-	if (e)
+	if (e) {
 		napi_throw_error(env, gf_error_to_string(e), "Failed to set source");
-	else
-		gf_filter_reconnect_output(f, opid);
+		return NULL;
+	}
+	e = gf_filter_reconnect_output(f, opid);
+	if (e)
+		napi_throw_error(env, gf_error_to_string(e), "Failed to reconnect output");
 	return NULL;
+}
+
+napi_value filter_reconnect(napi_env env, napi_callback_info info)
+{
+	GF_FilterPid *opid=NULL;
+	GF_Err e;
+	NARG_ARGS_THIS(1, 0)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc) {
+		s32 idx = -1;
+		if (napi_get_value_int32(env, argv[0], &idx) == napi_ok) {
+			if (idx>=0) {
+				opid = gf_filter_get_opid(f, (u32) idx);
+				if (!opid) {
+					napi_throw_error(env, NULL, "Invalid output PID index");
+					return NULL;
+				}
+			}
+		}
+	}
+	e = gf_filter_reconnect_output(f, opid);
+	if (e)
+		napi_throw_error(env, gf_error_to_string(e), "Failed to reconnect output");
+	return NULL;
+}
+
+napi_value filter_probe_link(napi_env env, napi_callback_info info)
+{
+	GF_Err e;
+	char *res=NULL;
+	s32 idx = -1;
+	s32 offset=1;
+	NARG_ARGS_THIS(2, 1)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc>1) {
+		if (napi_get_value_int32(env, argv[0], &idx) == napi_ok) {
+			offset=2;
+		}
+	}
+	NARG_STR(fdesc, (u32)offset, NULL);
+
+	e = gf_filter_probe_link(f, idx, fdesc, &res);
+	if (e) {
+		napi_throw_error(env, gf_error_to_string(e), "Failed to probe links");
+		return NULL;
+	}
+	napi_value val;
+	NAPI_CALL( napi_create_string_utf8(env, res, NAPI_AUTO_LENGTH, &val) );
+	gf_free(res);
+	return val;
+}
+
+napi_value filter_get_destinations(napi_env env, napi_callback_info info)
+{
+	GF_Err e;
+	char *res=NULL;
+	s32 idx = -1;
+	NARG_ARGS_THIS(1, 0)
+	FILTER
+
+	//check if 2nd param is int, get opid
+	if (argc && (napi_get_value_int32(env, argv[0], &idx) == napi_ok)) {
+	}
+
+	e = gf_filter_get_possible_destinations(f, idx, &res);
+	if (e) {
+		napi_throw_error(env, gf_error_to_string(e), "Failed to get destinations");
+		return NULL;
+	}
+	napi_value val;
+	NAPI_CALL( napi_create_string_utf8(env, res, NAPI_AUTO_LENGTH, &val) );
+	gf_free(res);
+	return val;
 }
 
 napi_value filter_require_source_id(napi_env env, napi_callback_info info)
@@ -3477,6 +3567,7 @@ napi_value fs_wrap_filter(napi_env env, GF_FilterSession *fs, GF_Filter *filter)
 		{ "set_source", 0, filter_set_source, 0, 0, 0, napi_enumerable, 0 },
 		{ "set_source_restricted", 0, filter_set_source_restricted, 0, 0, 0, napi_enumerable, 0 },
 		{ "insert", 0, filter_insert, 0, 0, 0, napi_enumerable, 0 },
+		{ "reconnect", 0, filter_reconnect, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_prop", 0, filter_ipid_prop, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_enum_props", 0, filter_ipid_enum_props, 0, 0, 0, napi_enumerable, 0 },
 		{ "opid_prop", 0, filter_opid_prop, 0, 0, 0, napi_enumerable, 0 },
@@ -3490,6 +3581,8 @@ napi_value fs_wrap_filter(napi_env env, GF_FilterSession *fs, GF_Filter *filter)
 		{ "bind", 0, filter_bind, 0, 0, 0, napi_enumerable, 0 },
 		{ "ipid_stats", 0, filter_ipid_stats, 0, 0, 0, napi_enumerable, 0 },
 		{ "opid_stats", 0, filter_opid_stats, 0, 0, 0, napi_enumerable, 0 },
+		{ "probe_link", 0, filter_probe_link, 0, 0, 0, napi_enumerable, 0 },
+		{ "get_destinations", 0, filter_get_destinations, 0, 0, 0, napi_enumerable, 0 },
 	};
 
 	if (napi_f) {
@@ -4136,6 +4229,11 @@ static u32 FEVT_PROP_NTP_REF = 62;
 static u32 FEVT_PROP_NAME = 63;
 static u32 FEVT_PROP_UI_NAME = 64;
 static u32 FEVT_PROP_PID = 65;
+static u32 FEVT_PROP_TO_PCK = 66;
+static u32 FEVT_PROP_ORIG_DELAY = 67;
+static u32 FEVT_PROP_HINT_FIRST_DTS = 68;
+static u32 FEVT_PROP_HINT_START_OFFSET = 69;
+static u32 FEVT_PROP_HINT_END_OFFSET = 70;
 
 
 #define FILTEREVENT\
@@ -4161,6 +4259,11 @@ static u32 FEVT_PROP_PID = 65;
 	EVT_BOOL(FEVT_PROP_FORCED_DASH_SWITCH, evt->play.forced_dash_segment_switch);\
 	EVT_BOOL(FEVT_PROP_DROP_NON_REF, evt->play.drop_non_ref);\
 	EVT_BOOL(FEVT_PROP_NO_BYTERANGE, evt->play.no_byterange_forward);\
+	EVT_U32(FEVT_PROP_TO_PCK, evt->play.to_pck);\
+	EVT_U32(FEVT_PROP_ORIG_DELAY, evt->play.orig_delay);\
+	EVT_U64(FEVT_PROP_HINT_FIRST_DTS, evt->play.hint_first_dts);\
+	EVT_U64(FEVT_PROP_HINT_START_OFFSET, evt->play.hint_start_offset);\
+	EVT_U64(FEVT_PROP_HINT_END_OFFSET, evt->play.hint_end_offset);\
 	EVT_U64(FEVT_PROP_START_OFFSET, evt->seek.start_offset);\
 	EVT_U64(FEVT_PROP_END_OFFSET, evt->seek.end_offset);\
 	EVT_U32(FEVT_PROP_HINT_BLOCK_SIZE, evt->seek.hint_block_size);\
@@ -4421,6 +4524,11 @@ napi_value wrap_filterevent(napi_env env, GF_FilterEvent *evt, napi_value *for_v
 			{ "forced_dash_segment_switch", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_FORCED_DASH_SWITCH},
 			{ "drop_non_ref", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_DROP_NON_REF},
 			{ "no_byterange_forward", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_NO_BYTERANGE},
+			{ "to_pck", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_TO_PCK},
+			{ "orig_delay", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_ORIG_DELAY},
+			{ "hint_first_dts", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_FIRST_DTS},
+			{ "hint_start_offset", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_START_OFFSET},
+			{ "hint_end_offset", NULL, NULL, fevt_getter, evt_set, NULL, napi_enumerable, &FEVT_PROP_HINT_END_OFFSET},
 		};
 		NAPI_CALL( napi_define_properties(env, obj, sizeof(fevt_properties)/sizeof(napi_property_descriptor), fevt_properties) );
 	}
@@ -4762,6 +4870,7 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_LOG_INFO)
 	DEF_CONST(GF_LOG_DEBUG)
 
+	DEF_CONST(GF_PROP_FORBIDDEN)
 	DEF_CONST(GF_PROP_BOOL)
 	DEF_CONST(GF_PROP_UINT)
 	DEF_CONST(GF_PROP_SINT)
@@ -4789,12 +4898,14 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_PROP_4CC)
 	DEF_CONST(GF_PROP_4CC_LIST)
 
+	DEF_CONST(GF_PROP_FIRST_ENUM)
 	DEF_CONST(GF_PROP_PIXFMT)
 	DEF_CONST(GF_PROP_PCMFMT)
 	DEF_CONST(GF_PROP_CICP_COL_PRIM)
 	DEF_CONST(GF_PROP_CICP_COL_TFC)
 	DEF_CONST(GF_PROP_CICP_COL_MX)
-
+	DEF_CONST(GF_PROP_CICP_LAYOUT)
+	DEF_CONST(GF_PROP_FIRST_ENUM)
 
 	DEF_CONST(GF_FEVT_PLAY)
 	DEF_CONST(GF_FEVT_SET_SPEED)
@@ -5139,41 +5250,9 @@ static napi_status InitConstants(napi_env env, napi_value exports)
 	DEF_CONST(GF_FS_FLAG_NO_RESERVOIR)
 	DEF_CONST(GF_FS_FLAG_FULL_LINK)
 	DEF_CONST(GF_FS_FLAG_NO_IMPLICIT)
-
-
-	DEF_CONST(GF_PROP_FORBIDDEN)
-	DEF_CONST(GF_PROP_SINT)
-	DEF_CONST(GF_PROP_UINT)
-	DEF_CONST(GF_PROP_LSINT)
-	DEF_CONST(GF_PROP_LUINT)
-	DEF_CONST(GF_PROP_BOOL)
-	DEF_CONST(GF_PROP_FRACTION)
-	DEF_CONST(GF_PROP_FRACTION64)
-	DEF_CONST(GF_PROP_FLOAT)
-	DEF_CONST(GF_PROP_DOUBLE)
-	DEF_CONST(GF_PROP_VEC2I)
-	DEF_CONST(GF_PROP_VEC2)
-	DEF_CONST(GF_PROP_VEC3I)
-	DEF_CONST(GF_PROP_VEC4I)
-	DEF_CONST(GF_PROP_STRING)
-	DEF_CONST(GF_PROP_STRING_NO_COPY)
-	DEF_CONST(GF_PROP_DATA)
-	DEF_CONST(GF_PROP_NAME)
-	DEF_CONST(GF_PROP_DATA_NO_COPY)
-	DEF_CONST(GF_PROP_CONST_DATA)
-	DEF_CONST(GF_PROP_POINTER)
-	DEF_CONST(GF_PROP_STRING_LIST)
-	DEF_CONST(GF_PROP_UINT_LIST)
-	DEF_CONST(GF_PROP_SINT_LIST)
-	DEF_CONST(GF_PROP_VEC2I_LIST)
-	DEF_CONST(GF_PROP_4CC)
-	DEF_CONST(GF_PROP_4CC_LIST)
-	DEF_CONST(GF_PROP_FIRST_ENUM)
-	DEF_CONST(GF_PROP_PIXFMT)
-	DEF_CONST(GF_PROP_PCMFMT)
-	DEF_CONST(GF_PROP_CICP_COL_PRIM)
-	DEF_CONST(GF_PROP_CICP_COL_TFC)
-	DEF_CONST(GF_PROP_CICP_COL_MX)
+	DEF_CONST(GF_FS_FLAG_REQUIRE_SOURCE_ID)
+	DEF_CONST(GF_FS_FLAG_FORCE_DEFER_LINK)
+	DEF_CONST(GF_FS_FLAG_PREVENT_PLAY)
 
 	DEF_CONST(GF_FS_ARG_HINT_NORMAL)
 	DEF_CONST(GF_FS_ARG_HINT_ADVANCED)

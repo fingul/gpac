@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -64,7 +64,7 @@ GF_Err FlushCaptureMode(GF_ISOFile *movie)
 	/*make sure nothing was added*/
 	if (gf_bs_get_position(movie->editFileMap->bs)) return GF_OK;
 
-	if (!strcmp(movie->fileName, "_gpac_isobmff_redirect")) {
+	if (movie->fileName && !strcmp(movie->fileName, "_gpac_isobmff_redirect")) {
 		if (!movie->on_block_out) {
 			GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[ISOBMFF] Missing output block callback, cannot write\n"));
 			return GF_BAD_PARAM;
@@ -4012,6 +4012,27 @@ exit:
 	return e;
 }
 
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
+static GF_Err gf_isom_get_trex_props(GF_ISOFile *file, GF_TrackBox *trak, GF_TrackExtendsBox **trex, GF_TrackExtensionPropertiesBox **trexprop)
+{
+	u32 i;
+	if (!file->moov->mvex) return GF_NOT_FOUND;
+	for (i=0; i<gf_list_count(file->moov->mvex->TrackExList); i++) {
+		*trex = gf_list_get(file->moov->mvex->TrackExList, i);
+		if ((*trex)->trackID == trak->Header->trackID) break;
+		*trex = NULL;
+	}
+	if (! *trex) return GF_NOT_FOUND;
+
+	for (i=0; i<gf_list_count(file->moov->mvex->TrackExPropList); i++) {
+		*trexprop = gf_list_get(file->moov->mvex->TrackExPropList, i);
+		if ((*trexprop)->trackID== trak->Header->trackID) break;
+		*trexprop = NULL;
+	}
+	return GF_OK;
+}
+#endif
+
 GF_EXPORT
 GF_Err gf_isom_get_track_template(GF_ISOFile *file, u32 track, u8 **output, u32 *output_size)
 {
@@ -4066,6 +4087,23 @@ GF_Err gf_isom_get_track_template(GF_ISOFile *file, u32 track, u8 **output, u32 
 	gf_list_add(stbl_temp->child_boxes, stbl->CompositionToDecode);
 
 
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
+	//get CSLG from trex if not in stbl
+	GF_CompositionToDecodeBox *trex_cslg=NULL;
+	if (!stbl_temp->CompositionToDecode) {
+		GF_TrackExtendsBox *trex;
+		GF_TrackExtensionPropertiesBox *trexprop=NULL;
+		gf_isom_get_trex_props(file, trak, &trex, &trexprop);
+		if (trexprop) {
+			trex_cslg = (GF_CompositionToDecodeBox *) gf_isom_box_find_child(trexprop->child_boxes, GF_ISOM_BOX_TYPE_CSLG);
+			if (trex_cslg) {
+				stbl_temp->CompositionToDecode = trex_cslg;
+				gf_list_add(stbl_temp->child_boxes, trex_cslg);
+			}
+		}
+	}
+#endif
+
 	count = gf_list_count(trak->child_boxes);
 	for (i=0;i<count; i++) {
 		GF_UnknownBox *b = gf_list_get(trak->child_boxes, i);
@@ -4106,6 +4144,12 @@ GF_Err gf_isom_get_track_template(GF_ISOFile *file, u32 track, u8 **output, u32 
 		trak->sample_encryption = senc;
 		gf_list_add(trak->child_boxes, senc);
 	}
+#ifndef GPAC_DISABLE_ISOM_FRAGMENTS
+	if (trex_cslg) {
+		stbl_temp->CompositionToDecode = NULL;
+		gf_list_del_item(stbl_temp->child_boxes, trex_cslg);
+	}
+#endif
 
 	stbl_temp->sampleGroupsDescription = NULL;
 	count = gf_list_count(stbl->sampleGroupsDescription);
@@ -4132,7 +4176,6 @@ GF_Err gf_isom_get_trex_template(GF_ISOFile *file, u32 track, u8 **output, u32 *
 #ifndef GPAC_DISABLE_ISOM_FRAGMENTS
 	GF_TrackBox *trak;
 	GF_BitStream *bs;
-	u32 i;
 	GF_TrackExtendsBox *trex = NULL;
 	GF_TrackExtensionPropertiesBox *trexprop = NULL;
 
@@ -4142,18 +4185,9 @@ GF_Err gf_isom_get_trex_template(GF_ISOFile *file, u32 track, u8 **output, u32 *
 	trak = gf_isom_get_track_from_file(file, track);
 	if (!trak || !trak->Media) return GF_BAD_PARAM;
 	if (!file->moov->mvex) return GF_NOT_FOUND;
-	for (i=0; i<gf_list_count(file->moov->mvex->TrackExList); i++) {
-		trex = gf_list_get(file->moov->mvex->TrackExList, i);
-		if (trex->trackID == trak->Header->trackID) break;
-		trex = NULL;
-	}
-	if (!trex) return GF_NOT_FOUND;
+	GF_Err e = gf_isom_get_trex_props(file, trak, &trex, &trexprop);
+	if (e) return e;
 
-	for (i=0; i<gf_list_count(file->moov->mvex->TrackExPropList); i++) {
-		trexprop = gf_list_get(file->moov->mvex->TrackExPropList, i);
-		if (trexprop->trackID== trak->Header->trackID) break;
-		trexprop = NULL;
-	}
 	bs = gf_bs_new(NULL, 0, GF_BITSTREAM_WRITE);
 	gf_isom_box_size( (GF_Box *) trex);
 	gf_isom_box_write((GF_Box *) trex, bs);
@@ -5111,7 +5145,7 @@ GF_Err gf_isom_set_media_timescale(GF_ISOFile *the_file, u32 trackNumber, u32 ne
 	trak = gf_isom_get_track_from_file(the_file, trackNumber);
 	if (!trak || !trak->Media || !trak->Media->mediaHeader) return GF_BAD_PARAM;
 	if ((trak->Media->mediaHeader->timeScale==newTS) && !new_tsinc)
-		return GF_EOS;
+		return GF_OK; //nothing to do
 
 	if (!newTS) newTS = trak->Media->mediaHeader->timeScale;
 	scale = newTS;
@@ -5445,6 +5479,12 @@ Bool gf_isom_is_same_sample_description(GF_ISOFile *f1, u32 tk1, u32 sdesc_index
 				a = (GF_Box *) avc1->mvc_config;
 			else if (avc1->av1_config)
 				a = (GF_Box *)avc1->av1_config;
+			else if (avc1->vvc_config)
+				a = (GF_Box *)avc1->vvc_config;
+			else if (avc1->vp_config)
+				a = (GF_Box *)avc1->vp_config;
+			else if (avc1->cfg_3gpp)
+				a = (GF_Box *)avc1->cfg_3gpp;
 			else
 				a = (GF_Box *) avc1->avc_config;
 
@@ -5458,10 +5498,22 @@ Bool gf_isom_is_same_sample_description(GF_ISOFile *f1, u32 tk1, u32 sdesc_index
 				b = (GF_Box *) avc2->mvc_config;
 			else if (avc2->av1_config)
 				b = (GF_Box *)avc2->av1_config;
+			else if (avc2->vvc_config)
+				b = (GF_Box *)avc2->vvc_config;
+			else if (avc2->vp_config)
+				b = (GF_Box *)avc2->vp_config;
+			else if (avc2->cfg_3gpp)
+				b = (GF_Box *)avc2->cfg_3gpp;
 			else
 				b = (GF_Box *) avc2->avc_config;
 
-			return gf_isom_box_equal(a,b);
+			Bool res = gf_isom_box_equal(a,b);
+			if (!res) return GF_FALSE;
+
+			//check dovi config disabled for now
+			//res = gf_isom_box_equal((GF_Box*)avc1->dovi_config, (GF_Box*)avc2->dovi_config);
+			//if (!res) return GF_FALSE;
+			return GF_TRUE;
 		}
 		break;
 		case GF_ISOM_BOX_TYPE_LSR1:
@@ -7527,7 +7579,7 @@ Bool sg_encryption_compare_entry(void *udta, void *_entry)
 
 /*sample encryption information group can be in stbl or traf*/
 GF_EXPORT
-GF_Err gf_isom_set_sample_cenc_group(GF_ISOFile *movie, u32 track, u32 sample_number, u8 isEncrypted, u8 crypt_byte_block, u8 skip_byte_block, u8 *key_info, u32 key_info_size)
+GF_Err gf_isom_set_sample_cenc_group(GF_ISOFile *movie, u32 track, u32 sample_number, u8 isEncrypted, u32 crypt_byte_block, u32 skip_byte_block, u8 *key_info, u32 key_info_size)
 {
 	GF_CENCSampleEncryptionGroupEntry entry;
 	if (!key_info || (key_info_size<19))

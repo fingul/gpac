@@ -72,6 +72,7 @@ GF_Err RTSP_UnpackURL(char *sURL, char Server[1024], u16 *Port, char Service[102
 	//extract the schema
 	i = 0;
 	while (i<=strlen(sURL)) {
+		if (i==10) return GF_BAD_PARAM;
 		if (sURL[i] == ':') goto found;
 		schema[i] = sURL[i];
 		i += 1;
@@ -112,7 +113,7 @@ found:
 	if (retest && strstr(retest, "/")) {
 		retest += 1;
 		i=0;
-		while (i<strlen(retest)) {
+		while (i<strlen(retest) && i<1023) {
 			if (retest[i] == '/') break;
 			text[i] = retest[i];
 			i += 1;
@@ -147,11 +148,12 @@ found:
 		if (test[i]=='[') is_ipv6 = GF_TRUE;
 		else if (test[i]==']') is_ipv6 = GF_FALSE;
 		if ( (test[i] == '/') || (!is_ipv6 && (test[i] == ':')) ) break;
+		if (i>=GF_ARRAY_LENGTH(text)) break;
 		text[i] = test[i];
 		i += 1;
 	}
-	text[i] = 0;
-	strncpy(Server, text, 1023);
+	text[MIN(i, GF_ARRAY_LENGTH(text)-1)] = 0;
+	strncpy(Server, text, 1024);
 	Server[1023]=0;
 	if (sep) sep[0] = '?';
 
@@ -469,7 +471,8 @@ GF_Err gf_rtsp_check_connection(GF_RTSPSession *sess)
 			if (ret==SSL_ERROR_SSL) {
 				char msg[1024];
 				SSL_load_error_strings();
-				ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+				ERR_error_string_n(ERR_get_error(), msg, 1023);
+				msg[1023]=0;
 				GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("[SSL] Cannot connect, error %s\n", msg));
 				return GF_IP_CONNECTION_FAILURE;
 			} else if ((ret==SSL_ERROR_WANT_READ) || (ret==SSL_ERROR_WANT_WRITE)) {
@@ -737,7 +740,8 @@ static GF_Err rstp_do_write_sock(GF_RTSPSession *sess, GF_Socket *sock, const u8
 				if (err==SSL_ERROR_SSL) {
 					char msg[1024];
 					SSL_load_error_strings();
-					ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+					ERR_error_string_n(ERR_get_error(), msg, 1023);
+					msg[1023]=0;
 					GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("[SSL] Cannot send, error %s\n", msg));
 				}
 				return GF_IP_NETWORK_FAILURE;
@@ -861,7 +865,8 @@ static GF_Err gf_rtsp_http_tunnel_setup(GF_RTSPSession *sess)
 			if (ret==SSL_ERROR_SSL) {
 				char msg[1024];
 				SSL_load_error_strings();
-				ERR_error_string_n(ERR_get_error(), msg, sizeof(msg));
+				ERR_error_string_n(ERR_get_error(), msg, 1023);
+				msg[1023]=0;
 				GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("[SSL] Cannot connect, error %s\n", msg));
 				return GF_IP_CONNECTION_FAILURE;
 			} else if ((ret==SSL_ERROR_WANT_READ) || (ret==SSL_ERROR_WANT_WRITE)) {
@@ -953,7 +958,7 @@ GF_RTSPSession *gf_rtsp_session_new_server(GF_Socket *rtsp_listener, Bool allow_
 	//OK create a new session
 	GF_SAFEALLOC(sess, GF_RTSPSession);
 	if (!sess) return NULL;
-	
+
 	sess->connection = new_conn;
 	sess->Port = port;
 	sess->ConnectionType = fam;

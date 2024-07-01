@@ -45,8 +45,10 @@ static GF_Err compose_process(GF_Filter *filter)
 	Bool ret;
 	GF_Compositor *ctx = (GF_Compositor *) gf_filter_get_udta(filter);
 	if (!ctx) return GF_BAD_PARAM;
-	if (!ctx->vout) return GF_OK;
-
+	//if acting as a source, we may not have a vout setup yet if we have not traversed the graph
+	if (!ctx->vout && !ctx->src) {
+		return GF_OK;
+	}
 	if (ctx->check_eos_state == 2)
 		return GF_EOS;
 
@@ -113,15 +115,19 @@ static GF_Err compose_process(GF_Filter *filter)
 		Bool was_over = GF_FALSE;
 		/*remember to check for eos*/
 		if (ctx->dur<0) {
-			if (ctx->frame_number >= (u32) -ctx->dur)
+			if (ctx->frame_number >= (u32) -ctx->dur) {
 				ctx->check_eos_state = 2;
+				gf_filter_abort(filter);
+			}
 		} else if (ctx->dur>0) {
 			Double n = ctx->scene_sampled_clock;
 			n /= 1000;
-			if (n>=ctx->dur)
+			if (n>=ctx->dur) {
 				ctx->check_eos_state = 2;
-			else if (!ret && ctx->vfr && !ctx->check_eos_state && !nb_sys_streams_active && ctx->scene_sampled_clock && !ctx->validator_mode) {
+				gf_filter_abort(filter);
+			} else if (!ret && ctx->vfr && !ctx->check_eos_state && !nb_sys_streams_active && ctx->scene_sampled_clock && !ctx->validator_mode) {
 				ctx->check_eos_state = 1;
+				ctx->last_check_pass = 0;
 				if (!ctx->validator_mode)
 					ctx->force_next_frame_redraw = GF_TRUE;
 			}
@@ -132,6 +138,7 @@ static GF_Err compose_process(GF_Filter *filter)
 			ctx->check_eos_state = 0;
 		} else if (gf_filter_end_of_session(filter)) {
 			ctx->check_eos_state = 2;
+			gf_filter_abort(filter);
 		}
 
 		if (ctx->timeout && (ctx->check_eos_state == 1) && !gf_filter_connections_pending(filter)) {
@@ -227,7 +234,8 @@ static void compositor_setup_vout(GF_Compositor *ctx)
 	pid = ctx->vout = gf_filter_pid_new(ctx->filter);
 	gf_filter_pid_set_name(pid, "vout");
 	//compositor initiated for RT playback, vout pid may not be connected
-	gf_filter_pid_set_loose_connect(pid);
+	if (ctx->player)
+		gf_filter_pid_set_loose_connect(pid);
 
 	gf_filter_pid_set_property(pid, GF_PROP_PID_CODECID, &PROP_UINT(GF_CODECID_RAW) );
 	gf_filter_pid_set_property(pid, GF_PROP_PID_STREAM_TYPE, &PROP_UINT(GF_STREAM_VISUAL) );
@@ -828,6 +836,8 @@ static GF_Err compose_initialize(GF_Filter *filter)
 	} else if (ctx->noback) {
 		ctx->forced_alpha = GF_TRUE;
 	}
+	if (ctx->src)
+		ctx->vfr = GF_TRUE;
 
 	//playout buffer not greater than max buffer
 	if (ctx->buffer > ctx->mbuffer)

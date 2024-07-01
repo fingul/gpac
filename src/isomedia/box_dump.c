@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -367,11 +367,12 @@ GF_Err dinf_box_dump(GF_Box *a, FILE * trace)
 
 GF_Err url_box_dump(GF_Box *a, FILE * trace)
 {
-	GF_DataEntryURLBox *p;
-
-	p = (GF_DataEntryURLBox *)a;
-	gf_isom_box_dump_start(a, "URLDataEntryBox", trace);
-	if (p->location) {
+	GF_DataEntryURLBox *p = (GF_DataEntryURLBox *)a;
+	const char *name = (p->type==GF_ISOM_BOX_TYPE_IMDT) ? "DataEntryImdaBox" : "URLDataEntryBox";
+	gf_isom_box_dump_start(a, name, trace);
+	if (p->type==GF_ISOM_BOX_TYPE_IMDT) {
+		gf_fprintf(trace, " imda_ID=\"%u\">\n", p->imda_ref_id);
+	} else if (p->location) {
 		gf_fprintf(trace, " URL=\"%s\">\n", p->location);
 	} else {
 		gf_fprintf(trace, ">\n");
@@ -383,7 +384,7 @@ GF_Err url_box_dump(GF_Box *a, FILE * trace)
 			}
 		}
 	}
-	gf_isom_box_dump_done("URLDataEntryBox", a, trace);
+	gf_isom_box_dump_done(name, a, trace);
 	return GF_OK;
 }
 
@@ -902,7 +903,7 @@ static void gnr_dump_exts(u8 *data, u32 data_size, FILE *trace)
 		gf_fprintf(trace, ">\n");
 		return;
 	}
-	
+
 	GF_BitStream *bs = gf_bs_new(data, data_size, GF_BITSTREAM_READ);
 	gf_bs_set_cookie(bs, GF_ISOM_BS_COOKIE_NO_LOGS);
 	while (gf_bs_available(bs)) {
@@ -1683,8 +1684,9 @@ static GF_Err dump_cpal(GF_UnknownBox *u, FILE * trace)
 			case 2:
 				if (types[i].bits==64)
 					sprintf(szTmp, " C%d=\"%f + %fi\"", i+1, gf_bs_read_float(bs), gf_bs_read_float(bs));
-				else if (types[i].bits==128)
-					sprintf(szTmp, " C%d=\"%f + %fi\"", i+1, gf_bs_read_double(bs), gf_bs_read_double(bs));
+				else if (types[i].bits==128) {
+					sprintf(szTmp, " C%d=\"%g + %gi\"", i+1, gf_bs_read_double(bs), gf_bs_read_double(bs));
+				}
 				else
 					sprintf(szTmp, " C%d=\"0x%X + 0x%Xi\"", i+1, gf_bs_read_int(bs, types[i].bits/2), gf_bs_read_int(bs, types[i].bits/2) );
 				break;
@@ -3198,7 +3200,7 @@ GF_Err trun_box_dump(GF_Box *a, FILE * trace)
 	if (full_dump) {
 		for (i=0; i<p->nb_samples; i++) {
 			GF_TrunEntry *ent = &p->samples[i];
-			
+
 			gf_fprintf(trace, "<TrackRunEntry");
 
 #ifdef GF_ENABLE_CTRN
@@ -5203,6 +5205,17 @@ GF_Err tfdt_box_dump(GF_Box *a, FILE * trace)
 	gf_isom_box_dump_done("TrackFragmentBaseMediaDecodeTimeBox", a, trace);
 	return GF_OK;
 }
+GF_Err rsot_box_dump(GF_Box *a, FILE * trace)
+{
+	GF_TFOriginalDurationBox *ptr = (GF_TFOriginalDurationBox*) a;
+	if (!a) return GF_BAD_PARAM;
+	gf_isom_box_dump_start(a, "RedundantSampleOriginalTimingBox", trace);
+	if (ptr->flags & 1) gf_fprintf(trace, " originalDuration=\"%u\"", ptr->original_duration);
+	if (ptr->flags & 2) gf_fprintf(trace, " elapsedDuration=\"%u\"", ptr->elapsed_duration);
+	gf_fprintf(trace, ">\n");
+	gf_isom_box_dump_done("RedundantSampleOriginalTimingBox", a, trace);
+	return GF_OK;
+}
 #endif /*GPAC_DISABLE_ISOM_FRAGMENTS*/
 
 GF_Err rvcc_box_dump(GF_Box *a, FILE * trace)
@@ -5801,7 +5814,7 @@ GF_Err tenc_box_dump(GF_Box *a, FILE * trace)
 	}
 	dump_data_hex(trace, (char *) ptr->key_info+4, 16);
 	if (ptr->version)
-		gf_fprintf(trace, "\" crypt_byte_block=\"%d\" skip_byte_block=\"%d", ptr->crypt_byte_block, ptr->skip_byte_block);
+		gf_fprintf(trace, "\" crypt_byte_block=\"%u\" skip_byte_block=\"%u", ptr->crypt_byte_block, ptr->skip_byte_block);
 	gf_fprintf(trace, "\">\n");
 
 	if (!ptr->size) {
@@ -5978,7 +5991,7 @@ GF_Err senc_box_dump(GF_Box *a, FILE * trace)
 	}
 	if (bs)
 		gf_bs_del(bs);
-		
+
 	if (!ptr->size) {
 		gf_fprintf(trace, "<SampleEncryptionEntry sampleCount=\"\" IV=\"\" SubsampleCount=\"\">\n");
 		gf_fprintf(trace, "<SubSampleEncryptionEntry NumClearBytes=\"\" NumEncryptedBytes=\"\"/>\n");
@@ -6975,6 +6988,52 @@ GF_Err emsg_box_dump(GF_Box *a, FILE * trace)
 	return GF_OK;
 }
 
+void scte35_dump_xml(FILE *dump, GF_BitStream *bs);
+GF_Err emib_box_dump(GF_Box *a, FILE * trace)
+{
+	GF_EventMessageBox *p = (GF_EventMessageBox *) a;
+
+	gf_isom_box_dump_start(a, "EventMessageInstanceBox", trace);
+	fprintf(trace, "presentation_time_delta=\""LLD"\" event_duration=\"%u\" event_id=\"%u\"",
+		p->presentation_time_delta, p->event_duration, p->event_id);
+
+	if (p->scheme_id_uri)
+		fprintf(trace, " scheme_id_uri=\"%s\"", p->scheme_id_uri);
+	if (p->value)
+		fprintf(trace, " value=\"%s\"", p->value);
+
+	if (p->message_data) {
+		dump_data_attribute(trace, " message_data", p->message_data, p->message_data_size);
+		gf_fprintf(trace, ">\n");
+
+		GF_BitStream *bs = gf_bs_new(p->message_data, p->message_data_size, GF_BITSTREAM_READ);
+		scte35_dump_xml(trace, bs);
+		gf_bs_del(bs);
+	} else {
+		gf_fprintf(trace, ">\n");
+	}
+
+	gf_isom_box_dump_done("EventMessageInstanceBox", a, trace);
+	return GF_OK;
+}
+
+GF_Err emeb_box_dump(GF_Box *a, FILE * trace)
+{
+	gf_isom_box_dump_start(a, "EventMessageEmptyBox", trace);
+	gf_fprintf(trace, ">\n");
+	gf_isom_box_dump_done("EventMessageEmptyBox", a, trace);
+	return GF_OK;
+}
+
+GF_Err evte_box_dump(GF_Box *a, FILE * trace)
+{
+	//GF_EventMessageSampleEntryBox *p = (GF_EventMessageSampleEntryBox *)a;
+	gf_isom_box_dump_start(a, "EventMessageSampleEntryBox", trace);
+	gf_fprintf(trace, ">\n");
+	gf_isom_box_dump_done("EventMessageSampleEntryBox", a, trace);
+	return GF_OK;
+}
+
 GF_Err csgp_box_dump(GF_Box *a, FILE * trace)
 {
 	u32 i;
@@ -7025,7 +7084,7 @@ GF_Err ienc_box_dump(GF_Box *a, FILE * trace)
 	if (!a) return GF_BAD_PARAM;
 	gf_isom_box_dump_start(a, "ItemEncryptionPropertyBox", trace);
 	if (ptr->version)
-		gf_fprintf(trace, " skip_byte_block=\"%d\" crypt_byte_block=\"%d\"", ptr->skip_byte_block, ptr->crypt_byte_block);
+		gf_fprintf(trace, " skip_byte_block=\"%u\" crypt_byte_block=\"%u\"", ptr->skip_byte_block, ptr->crypt_byte_block);
 	gf_fprintf(trace, ">\n");
 	nb_keys = ptr->key_info ? ptr->key_info[2] : 0;
 	kpos = 3;

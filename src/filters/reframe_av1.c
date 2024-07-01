@@ -277,7 +277,8 @@ GF_Err av1dmx_check_format(GF_Filter *filter, GF_AV1DmxCtx *ctx, GF_BitStream *b
 			return e;
 		}
 		if (!ctx->timescale && !ctx->state.has_temporal_delim) {
-			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[AV1Dmx] Error OBU stream start with %s, not a temporal delimiter - NOT SUPPORTED\n", gf_av1_get_obu_name(ctx->state.obu_type) ));
+			GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[AV1Dmx] Error OBU stream start with %s, not a temporal delimiter\n", gf_av1_get_obu_name(ctx->state.obu_type) ));
+			if (!e) e = GF_NON_COMPLIANT_BITSTREAM;
 			gf_filter_setup_failure(filter, e);
 			ctx->bsmode = UNSUPPORTED;
 			return e;
@@ -600,6 +601,7 @@ static void av1dmx_check_pid(GF_Filter *filter, GF_AV1DmxCtx *ctx)
 	if (ctx->is_av1 && !gf_list_count(ctx->state.frame_state.header_obus)) return;
 
 	if (!ctx->opid) {
+		if (ctx->bsmode==UNSUPPORTED) return;
 		ctx->opid = gf_filter_pid_new(filter);
 		av1dmx_check_dur(filter, ctx);
 	}
@@ -938,7 +940,8 @@ static GF_Err av1dmx_parse_flush_sample(GF_Filter *filter, GF_AV1DmxCtx *ctx)
 	if (!ctx->opid)
 		return GF_NON_COMPLIANT_BITSTREAM;
 
-	gf_bs_get_content_no_truncate(ctx->state.bs, &ctx->state.frame_obus, &pck_size, &ctx->state.frame_obus_alloc);
+	if (gf_bs_get_size(ctx->state.bs))
+		gf_bs_get_content_no_truncate(ctx->state.bs, &ctx->state.frame_obus, &pck_size, &ctx->state.frame_obus_alloc);
 
 	if (!pck_size) {
 		GF_LOG(GF_LOG_DEBUG, GF_LOG_MEDIA, ("[AV1Dmx] no frame OBU, skipping OBU\n"));
@@ -1063,8 +1066,9 @@ GF_Err av1dmx_parse_av1(GF_Filter *filter, GF_AV1DmxCtx *ctx)
 		return GF_OK;
 	}
 
-	return av1dmx_parse_flush_sample(filter, ctx);
-
+	e = av1dmx_parse_flush_sample(filter, ctx);
+	ctx->state.clli_valid = ctx->state.mdcv_valid = 0;
+	return e;
 }
 
 GF_Err av1dmx_process_buffer(GF_Filter *filter, GF_AV1DmxCtx *ctx, const char *data, u32 data_size, Bool is_copy)

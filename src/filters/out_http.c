@@ -1631,7 +1631,17 @@ static void httpout_sess_io(void *usr_cbk, GF_NETIO_Parameter *parameter)
 			if (!strchr("/\\", mdir[len-1]))
 				gf_dynstrcat(&full_path, "/", NULL);
 
+			char *querystring = strchr(res_url, '?');
+
+			// ignore query string when looking for a file on disk
+			if (querystring)
+				querystring[0] = 0;
+
 			gf_dynstrcat(&full_path, res_url, NULL);
+
+			// restore query string in original url
+			if (querystring)
+				querystring[0] = '?';
 
 			if (gf_file_exists(full_path) || gf_dir_exists(full_path) ) {
 				the_dir = adi;
@@ -2020,6 +2030,7 @@ static void httpout_sess_io(void *usr_cbk, GF_NETIO_Parameter *parameter)
 				}
 				if (data) gf_free(data);
 			}
+			gf_fseek(sess->resource, 0, SEEK_SET);
 		}
 		//only put content length if not using chunk transfer - bytes_in_req may be > 0 if we have a byte range on a chunk-transfer session
 		if (sess->bytes_in_req && !sess->use_chunk_transfer) {
@@ -2476,7 +2487,7 @@ static GF_Err httpout_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 
 			if (ctx->hmode==MODE_PUSH) {
 				GF_Err e;
-				u32 flags = GF_NETIO_SESSION_NOT_THREADED|GF_NETIO_SESSION_NOT_CACHED|GF_NETIO_SESSION_PERSISTENT;
+				u32 flags = GF_NETIO_SESSION_NOT_THREADED|GF_NETIO_SESSION_NOT_CACHED|GF_NETIO_SESSION_PERSISTENT|GF_NETIO_SESSION_SHARE_SOCKET;
 				if (!ctx->blockio)
 					flags |= GF_NETIO_SESSION_NO_BLOCK;
 
@@ -2669,7 +2680,7 @@ static GF_Err httpout_initialize(GF_Filter *filter)
 		cplen = (u32) (sep-ctx->dst-7);
 		if (cplen>1023) cplen=1023;
 		strncpy(szIP, ctx->dst+7, cplen);
-		szIP[1023] = 0;
+		szIP[MIN(cplen,1023)] = 0;
 		sep = strchr(szIP, ':');
 		if (sep) {
 			port = atoi(sep+1);
@@ -4505,7 +4516,7 @@ next_pck:
 				if (!orig_ctx) orig_ctx = ctx;
 
 				if (orig_ctx->dst_in && (orig_ctx->dst_in != in) ) {
-					GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("[HTTPOut] Mutliple input PIDs with no file name set, broken graph, discarding input %s\n\tYou may retry by adding a new http output filter\n", gf_filter_pid_get_name(in->ipid) ));
+					GF_LOG(GF_LOG_ERROR, GF_LOG_HTTP, ("[HTTPOut] Multiple input PIDs with no file name set, broken graph, discarding input %s\n\tYou may retry by adding a new http output filter\n", gf_filter_pid_get_name(in->ipid) ));
 					httpout_input_in_error(in, GF_SERVICE_ERROR);
 					continue;
 				} else {

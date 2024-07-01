@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2023
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / DASH/HLS demux filter
@@ -65,7 +65,7 @@ enum {
 typedef struct
 {
 	//opts
-	s32 shift_utc, spd, route_shift;
+	s32 shift_utc, spd, mcast_shift;
 	u32 max_buffer, tiles_rate, segstore, delay40X, exp_threshold, switch_count, bwcheck;
 	s32 auto_switch;
 	s32 init_timeshift;
@@ -100,6 +100,7 @@ typedef struct
 
 	/*max width & height in all active representations*/
 	u32 width, height;
+	u32 service_id;
 
 	Double seek_request;
 	Double media_start_range;
@@ -274,6 +275,8 @@ static void dashdmx_forward_packet(GF_DASHDmxCtx *ctx, GF_FilterPacket *in_pck, 
 				if (seg_name) {
 					gf_filter_pck_set_property(ref, GF_PROP_PCK_FILENAME, &PROP_STRING(seg_name) );
 					gf_filter_pck_set_property(ref, GF_PROP_PCK_FILENUM, &PROP_UINT(seg_number) );
+					gf_filter_pck_set_property(ref, GF_PROP_PCK_MPD_SEGSTART, &PROP_FRAC64(seg_time));
+
 					if (group->url_changed && group->current_url) {
 						gf_filter_pck_set_property(ref, GF_PROP_PCK_FRAG_RANGE, NULL);
 						gf_filter_pck_set_property(ref, GF_PROP_PID_URL, &PROP_STRING(group->current_url));
@@ -789,11 +792,19 @@ const char *dashdmx_io_get_mime(GF_DASHFileIO *dashio, GF_DASHFileIOSession sess
 }
 const char *dashdmx_io_get_header_value(GF_DASHFileIO *dashio, GF_DASHFileIOSession session, const char *header_name)
 {
+	const char *hdr;
 #ifdef GPAC_USE_DOWNLOADER
-	return gf_dm_sess_get_header((GF_DownloadSession *)session, header_name);
-#else
-	return NULL;
+	hdr = gf_dm_sess_get_header((GF_DownloadSession *)session, header_name);
+	if (hdr) return hdr;
 #endif
+	GF_DASHDmxCtx *ctx = (GF_DASHDmxCtx *)dashio->udta;
+	const GF_PropertyValue *p = gf_filter_pid_get_property_str(ctx->mpd_pid, header_name);
+	if (p) return p->value.string;
+	GF_PropertyEntry *pe=NULL;
+	p = gf_filter_pid_get_info_str(ctx->mpd_pid, header_name, &pe);
+	gf_filter_release_property(pe);
+	if (p) return p->value.string;
+	return NULL;
 }
 u64 dashdmx_io_get_utc_start_time(GF_DASHFileIO *dashio, GF_DASHFileIOSession session)
 {
@@ -1007,6 +1018,13 @@ void dashdmx_io_manifest_updated(GF_DASHFileIO *dashio, const char *manifest_nam
 		}
 
 		if ((ctx->forward==DFWD_FILE) && ctx->output_mpd_pid) {
+			//for routeout
+			u32 manifest_type = gf_dash_is_m3u8(ctx->dash) ? 2 : 1;
+			if (gf_dash_is_dynamic_mpd(ctx->dash))
+				manifest_type |= 0x80000000;
+
+			gf_filter_pid_set_property(ctx->output_mpd_pid, GF_PROP_PID_IS_MANIFEST, &PROP_UINT(manifest_type));
+
 			GF_FilterPacket *pck = gf_filter_pck_new_alloc(ctx->output_mpd_pid, manifest_payload_len, &output);
 			if (pck) {
 				GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASHDmx] Manifest %s updated, forwarding\n", manifest_name));
@@ -1237,13 +1255,28 @@ GF_Err dashdmx_io_on_dash_event(GF_DASHFileIO *dashio, GF_DASHEventType dash_evt
 		GF_DASHGroup *group = gf_dash_get_group_udta(ctx->dash, group_idx);
 
 		if (!group) {
-			group_idx = gf_dash_group_has_dependent_group(ctx->dash, group_idx);
-			group = gf_dash_get_group_udta(ctx->dash, group_idx);
+			s32 dep_group_idx = gf_dash_group_has_dependent_group(ctx->dash, group_idx);
+			group = gf_dash_get_group_udta(ctx->dash, dep_group_idx);
 		}
 		//do not notify HAS status (selected qualities & co) right away, we are still potentially processing packets from previous segment(s)
 		if (group)
 			group->notify_quality_change = GF_TRUE;
 
+
+		GF_FilterEvent sel_evt;
+		GF_FEVT_INIT(sel_evt, GF_FEVT_DASH_QUALITY_SELECT, ctx->mpd_pid);
+		sel_evt.dash_select.service_id = ctx->service_id;
+		sel_evt.dash_select.as_id = gf_dash_group_get_as_id(ctx->dash, group_idx);
+		sel_evt.dash_select.period_id = gf_dash_get_period_id(ctx->dash);
+
+		u32 i, count = gf_dash_group_get_num_qualities(ctx->dash, group_idx);
+		for (i=0; i<count; i++) {
+			GF_DASHQualityInfo qinfo;
+			gf_dash_group_get_quality_info(ctx->dash, group_idx, i, &qinfo);
+			sel_evt.dash_select.rep_id = qinfo.hls_variant_url ? qinfo.hls_variant_url : qinfo.ID;
+			sel_evt.dash_select.select_type = qinfo.is_selected ? 0 : (qinfo.disabled ? 2 : 1);
+			gf_filter_pid_send_event(ctx->mpd_pid, &sel_evt);
+		}
 		return GF_OK;
 	}
 	if (dash_evt==GF_DASH_EVENT_TIMESHIFT_UPDATE) {
@@ -1626,8 +1659,7 @@ static void dashdmx_declare_properties(GF_DASHDmxCtx *ctx, GF_DASHGroup *group, 
 			stream_type = GF_STREAM_VISUAL;
 		} else if (qinfo.sample_rate || qinfo.nb_channels) {
 			stream_type = GF_STREAM_AUDIO;
-		} else if (strstr(qinfo.mime, "text")
-			|| strstr(qinfo.codec, "vtt")
+		} else if (strstr(qinfo.codec, "vtt")
 			|| strstr(qinfo.codec, "srt")
 			|| strstr(qinfo.codec, "text")
 			|| strstr(qinfo.codec, "tx3g")
@@ -1635,6 +1667,13 @@ static void dashdmx_declare_properties(GF_DASHDmxCtx *ctx, GF_DASHGroup *group, 
 			|| strstr(qinfo.codec, "stpp")
 		) {
 			stream_type = GF_STREAM_TEXT;
+		} else if (qinfo.mime) {
+			if (!strncmp(qinfo.mime, "video/", 6))
+				stream_type = GF_STREAM_VISUAL;
+			else if (!strncmp(qinfo.mime, "audio/", 6))
+				stream_type = GF_STREAM_AUDIO;
+			else if (!strncmp(qinfo.mime, "text/", 5))
+				stream_type = GF_STREAM_TEXT;
 		}
 		dashdm_format_qinfo(&qdesc, &qinfo);
 
@@ -1965,8 +2004,6 @@ static GF_Err dashdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 			GF_LOG(GF_LOG_INFO, GF_LOG_DASH, ("[DASHDmx] Creating manifest output PID\n"));
 			//for routeout
 			gf_filter_pid_set_property(ctx->output_mpd_pid, GF_PROP_PID_PREMUX_STREAM_TYPE, &PROP_UINT(GF_STREAM_FILE));
-			u32 manifest_type = gf_dash_is_m3u8(ctx->dash) ? 2 : 1;
-			gf_filter_pid_set_property(ctx->output_mpd_pid, GF_PROP_PID_IS_MANIFEST, &PROP_UINT(manifest_type));
 		}
 
 
@@ -1976,6 +2013,7 @@ static GF_Err dashdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 			gf_filter_setup_failure(filter, e);
 			return e;
 		}
+
 		frag = strchr(p->value.string, '#');
 		if (frag) {
 			if (ctx->frag_url) gf_free(ctx->frag_url);
@@ -1995,6 +2033,8 @@ static GF_Err dashdmx_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool i
 			gf_filter_pid_send_event(ctx->mpd_pid, &evt);
 			gf_filter_post_process_task(filter);
 		}
+		p = gf_filter_pid_get_property(pid, GF_PROP_PID_SERVICE_ID);
+		if (p) ctx->service_id = p->value.uint;
 		return GF_OK;
 	} else if (ctx->mpd_pid == pid) {
 		return GF_OK;
@@ -2383,7 +2423,7 @@ static GF_Err dashdmx_initialize(GF_Filter *filter)
 	gf_dash_set_algo(ctx->dash, algo);
 	gf_dash_set_utc_shift(ctx->dash, ctx->shift_utc);
 	gf_dash_set_suggested_presentation_delay(ctx->dash, ctx->spd);
-	gf_dash_set_route_ast_shift(ctx->dash, ctx->route_shift);
+	gf_dash_set_mcast_ast_shift(ctx->dash, ctx->mcast_shift);
 	gf_dash_enable_utc_drift_compensation(ctx->dash, ctx->server_utc);
 	gf_dash_set_tile_adaptation_mode(ctx->dash, ctx->tile_mode, ctx->tiles_rate);
 
@@ -2680,6 +2720,7 @@ static Bool dashdmx_process_event(GF_Filter *filter, const GF_FilterEvent *fevt)
 
 		gf_filter_pid_send_event(ipid, &src_evt);
 		gf_filter_post_process_task(filter);
+
 		//cancel the event
 		return GF_TRUE;
 
@@ -2880,7 +2921,7 @@ static void dashdmx_update_group_stats(GF_DASHDmxCtx *ctx, GF_DASHGroup *group)
 	p = gf_filter_get_info(group->seg_filter_src, GF_PROP_PID_DOWN_SIZE, &pe);
 	if (p) file_size = p->value.longuint;
 
-	p = gf_filter_get_info_str(group->seg_filter_src, "x-route", &pe);
+	p = gf_filter_get_info_str(group->seg_filter_src, "x-mcast", &pe);
 	if (p && p->value.string && !strcmp(p->value.string, "yes")) {
 		broadcast_flag = GF_TRUE;
 	}
@@ -3525,7 +3566,7 @@ static const GF_FilterArgs DASHDmxArgs[] =
 
 	{ OFFS(shift_utc), "shift DASH UTC clock in ms", GF_PROP_SINT, "0", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(spd), "suggested presentation delay in ms", GF_PROP_SINT, "-I", NULL, GF_FS_ARG_HINT_EXPERT},
-	{ OFFS(route_shift), "shift ROUTE requests time by given ms", GF_PROP_SINT, "0", NULL, GF_FS_ARG_HINT_EXPERT},
+	{ OFFS(mcast_shift), "shift requests time by given ms for multicast sources", GF_PROP_SINT, "0", NULL, GF_FS_ARG_HINT_EXPERT},
 	{ OFFS(server_utc), "use `ServerUTC` or `Date` HTTP headers instead of local UTC", GF_PROP_BOOL, "yes", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(screen_res), "use screen resolution in selection phase", GF_PROP_BOOL, "yes", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(init_timeshift), "set initial timeshift in ms (if >0) or in per-cent of timeshift buffer (if <0)", GF_PROP_SINT, "0", NULL, GF_FS_ARG_HINT_ADVANCED},

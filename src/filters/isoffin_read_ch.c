@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISOBMFF reader filter
@@ -199,7 +199,7 @@ static void isor_update_cenc_info(ISOMChannel *ch, Bool for_item)
 	GF_Err e;
 	Bool Is_Encrypted;
 	u32 out_size;
-	u8 crypt_byte_block, skip_byte_block;
+	u32 crypt_byte_block, skip_byte_block;
 	u8 piff_info[20];
 	u8 *key_info = NULL;
 	u32 key_info_size = 0;
@@ -895,13 +895,15 @@ static void isor_replace_nal(ISOMChannel *ch, u8 *data, u32 size, u8 nal_type, B
 	ch->xps_mask |= state;
 	*needs_reset = 1;
 
-	GF_SAFEALLOC(sl, GF_NALUFFParam);
-	if (!sl) return;
-	sl->data = gf_malloc(sizeof(char)*size);
-	memcpy(sl->data, data, size);
-	sl->size = size;
-	sl->id = ps_id;
-	gf_list_add(list, sl);
+	if (list) {
+		GF_SAFEALLOC(sl, GF_NALUFFParam);
+		if (!sl) return;
+		sl->data = gf_malloc(sizeof(char)*size);
+		memcpy(sl->data, data, size);
+		sl->size = size;
+		sl->id = ps_id;
+		gf_list_add(list, sl);
+	}
 }
 
 u8 key_info_get_iv_size(const u8 *key_info, u32 nb_keys, u32 idx, u8 *const_iv_size, const u8 **const_iv);
@@ -1007,7 +1009,7 @@ void isor_reader_check_config(ISOMChannel *ch)
 		return;
 	}
 	//analyze mode, do not rewrite
-	if (ch->owner->analyze) return;
+	if (ch->owner->analyze || ch->owner->norw) return;
 
 	//we cannot touch the payload if encrypted but no SAI buffer
 	if (ch->pck_encrypted && !ch->sai_buffer)

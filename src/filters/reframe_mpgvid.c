@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / MPEG-1/2/4(Part2) video reframer filter
@@ -227,6 +227,8 @@ static void mpgviddmx_check_dur(GF_Filter *filter, GF_MPGVidDmxCtx *ctx)
 	if (e) {
 		GF_LOG(GF_LOG_ERROR, GF_LOG_MEDIA, ("[MPGVid] Could not parse video header - duration  not estimated\n"));
 		ctx->file_loaded = GF_TRUE;
+		gf_m4v_parser_del(vparser);
+		gf_fclose(stream);
 		return;
 	}
 
@@ -425,7 +427,7 @@ static void mpgviddmx_check_pid(GF_Filter *filter, GF_MPGVidDmxCtx *ctx, u32 vos
 			char *frame = dcfg;
 			while ((i+3<vosh_size)  && ((frame[i]!=0) || (frame[i+1]!=0) || (frame[i+2]!=1))) i++;
 			if (i+4>=vosh_size) break;
-			if (strncmp(frame+i+4, "DivX", 4)) {
+			if (i+8 < vosh_size && strncmp(frame+i+4, "DivX", 4)) {
 				i += 4;
 				continue;
 			}
@@ -735,9 +737,11 @@ GF_Err mpgviddmx_process(GF_Filter *filter)
 		//we have some potential bytes of a start code in the store, copy some more bytes and check if valid start code.
 		//if not, dispatch these bytes as continuation of the data
 		if (ctx->bytes_in_header) {
-
-			memcpy(ctx->hdr_store + ctx->bytes_in_header, start, MIN_HDR_STORE - ctx->bytes_in_header);
-			current = mpgviddmx_next_start_code(ctx->hdr_store, MIN_HDR_STORE);
+			u32 csize = MIN_HDR_STORE - ctx->bytes_in_header;
+			if (csize > (u32) remain) csize=remain;
+			//the two zones may overlap
+			memmove(ctx->hdr_store + ctx->bytes_in_header, start, csize);
+			current = mpgviddmx_next_start_code(ctx->hdr_store, ctx->bytes_in_header+csize);
 
 			//no start code in stored buffer
 			if ((current<0) || (current >= (s32) ctx->bytes_in_header) )  {

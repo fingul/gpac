@@ -327,6 +327,9 @@ static char** extract_attributes(const char *name, const char *line, const int n
 	if (!safe_start_equals(name, line))
 		return NULL;
 	ret = gf_calloc((num_attributes + 1), sizeof(char*));
+	if (!ret) return NULL;
+	if (!num_attributes) return ret;
+
 	curr_attribute = 0;
 	for (i=start; i<=len; i++) {
 		if (line[i] == '\0' || (!quote && line[i] == ',')  || (line[i] == quote)) {
@@ -628,7 +631,7 @@ static char** parse_attributes(const char *line, s_accumulated_attributes *attri
 		M3U8_COMPATIBILITY_VERSION(1);
 		return ret;
 	}
-	ret = extract_attributes("#EXT-X-DISCONTINUITY-SEQUENCE", line, 0);
+	ret = extract_attributes("#EXT-X-DISCONTINUITY-SEQUENCE", line, 1);
 	if (ret) {
 		if (ret[0]) {
 			int_value = (s32)strtol(ret[0], &end_ptr, 10);
@@ -717,7 +720,7 @@ static char** parse_attributes(const char *line, s_accumulated_attributes *attri
 				} else {
 					GF_LOG(GF_LOG_WARNING, GF_LOG_DASH,("[M3U8] Misformed #EXT-X-MEDIA:LANGUAGE=%s. Quotes are incorrect.\n", ret[i]+5));
 				}
-			} else if (safe_start_equals("NAME=", ret[i])) {
+			} else if (safe_start_equals("NAME=\"", ret[i])) {
 				if (attributes->name) gf_free(attributes->name);
 				attributes->name = gf_strdup(ret[i]+5+1);
 				u32 len = (u32) strlen(attributes->name);
@@ -779,6 +782,10 @@ static char** parse_attributes(const char *line, s_accumulated_attributes *attri
 	}
 	if (!strncmp(line, "#EXT-X-I-FRAME-STREAM-INF", strlen("#EXT-X-I-FRAME-STREAM-INF") )) {
 		//todo extract I/intra rate for speed adaptation
+		return NULL;
+	}
+	//ignored for now
+	if (!strncmp(line, "#EXT-X-BITRATE", strlen("#EXT-X-BITRATE") )) {
 		return NULL;
 	}
 	if (!strncmp(line, "#EXT-X-PART-INF", strlen("#EXT-X-PART-INF") )) {
@@ -1095,9 +1102,10 @@ static void reset_attribs(s_accumulated_attributes *attribs, Bool is_cleanup)
 	RST_ATTR(group.audio)
 	RST_ATTR(language)
 	RST_ATTR(title)
-	if (is_cleanup)
+	if (is_cleanup) {
 		RST_ATTR(key_url)
-
+		RST_ATTR(name)
+	}
 	RST_ATTR(init_url)
 	RST_ATTR(mediaURL)
 }

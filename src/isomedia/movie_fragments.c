@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / ISO Media File Format sub-project
@@ -1869,12 +1869,18 @@ GF_Err gf_isom_close_segment(GF_ISOFile *movie, s32 subsegments_per_sidx, GF_ISO
 		} else {
 			sidx->earliest_presentation_time = prev_earliest_cts;
 
-			/*if more subsegments requested than fragments available, make a single sidx*/
-			if ((s32) count <= subsegments_per_sidx)
-				subsegments_per_sidx = 0;
-
-			if (daisy_chain_sidx && (subsegments_per_sidx<2))
-				subsegments_per_sidx = 2;
+			/*if more subsegments requested than fragments available, make a single sidx
+				for daisy chaining use strict as we don't count the chained entry in subsegments_per_sidx
+			*/
+			if (daisy_chain_sidx) {
+				if ((s32) count < subsegments_per_sidx)
+					subsegments_per_sidx = 0;
+				if (subsegments_per_sidx<2)
+					subsegments_per_sidx = 2;
+			} else {
+				if ((s32) count <= subsegments_per_sidx)
+					subsegments_per_sidx = 0;
+			}
 
 			/*single SIDX, each fragment is a subsegment and we reference all subsegments*/
 			if (!subsegments_per_sidx) {
@@ -1974,7 +1980,6 @@ GF_Err gf_isom_close_segment(GF_ISOFile *movie, s32 subsegments_per_sidx, GF_ISO
 		}
 		count = cur_idx = 0;
 	}
-
 
 	last_top_box_pos = root_prev_offset = sidx_end;
 	sidx_idx = 0;
@@ -2205,7 +2210,14 @@ GF_Err gf_isom_close_segment(GF_ISOFile *movie, s32 subsegments_per_sidx, GF_ISO
 					if (movie->root_sidx)
 						movie->root_sidx_index++;
 					sidx_idx++;
+
+					if (defer_moofs && gf_list_count(movie->moof_list)) {
+						GF_LOG(GF_LOG_ERROR, GF_LOG_CONTAINER, ("[isobmf] Hierarchical or chain sidx cannot be used with deferred sample storage\n"));
+						e = GF_NOT_SUPPORTED;
+						goto exit;
+					}
 				}
+
 			}
 		}
 		if (movie->moof->moof_data_len) {
@@ -2272,11 +2284,15 @@ GF_Err gf_isom_close_segment(GF_ISOFile *movie, s32 subsegments_per_sidx, GF_ISO
 			entry->sidx->refs[entry->sidx->nb_refs-1] = next_entry->sidx->refs[0];
 			/*and rewrite reference type, size and dur*/
 			entry->sidx->refs[entry->sidx->nb_refs-1].reference_type = GF_TRUE;
-			entry->sidx->refs[entry->sidx->nb_refs-1].reference_size = (u32) (last_entry_end_offset - next_entry->start_offset);
 			entry->sidx->refs[entry->sidx->nb_refs-1].subsegment_duration = 0;
 			for (j=0; j<next_entry->sidx->nb_refs; j++) {
 				entry->sidx->refs[entry->sidx->nb_refs-1].subsegment_duration += next_entry->sidx->refs[j].subsegment_duration;
 			}
+			//According to annex J 2.3, the reference size for a daisy entry is the index size of the target sidx, not the size of the target
+			//subsegment (commented below) - cf #2733
+			//entry->sidx->refs[entry->sidx->nb_refs-1].reference_size = (u32) (last_entry_end_offset - next_entry->start_offset);
+			gf_isom_box_size((GF_Box *)next_entry->sidx);
+			entry->sidx->refs[entry->sidx->nb_refs-1].reference_size = (u32) next_entry->sidx->size;
 			sidx_rewrite(entry->sidx, movie->editFileMap->bs, entry->start_offset, NULL);
 		}
 		while (gf_list_count(daisy_sidx)) {
@@ -2325,8 +2341,8 @@ exit:
 		gf_bs_del(movie->editFileMap->bs);
 		movie->editFileMap->bs = orig_bs;
 	}
-	//flush all defered
-	if (defer_moofs) {
+	//flush all deferred
+	if (!e && defer_moofs) {
 		while (gf_list_count(defer_moofs)) {
 			movie->moof = gf_list_pop_front(defer_moofs);
 			movie->on_block_out(movie->on_block_out_usr_data, movie->moof->moof_data, movie->moof->moof_data_len, NULL, 0);
@@ -3130,6 +3146,24 @@ GF_Err gf_isom_fragment_add_subsample(GF_ISOFile *movie, GF_ISOTrackID TrackID, 
 		gf_list_add(traf->sub_samples, subs);
 	}
 	return gf_isom_add_subsample_info(subs, last_sample, subSampleSize, priority, reserved, discardable);
+}
+
+
+GF_Err gf_isom_set_fragment_original_duration(GF_ISOFile *movie, GF_ISOTrackID TrackID, u32 orig_dur, u32 elapsed_dur)
+{
+	GF_TrackFragmentBox *traf;
+	if (!movie->moof || !(movie->FragmentsFlags & GF_ISOM_FRAG_WRITE_READY) ) return GF_BAD_PARAM;
+
+	traf = gf_isom_get_traf(movie, TrackID);
+	if (!traf) return GF_BAD_PARAM;
+
+	if (!traf->rsot) {
+		traf->rsot = (GF_TFOriginalDurationBox *) gf_isom_box_new_parent(&traf->child_boxes, GF_ISOM_BOX_TYPE_RSOT);
+		if (!traf->rsot) return GF_OUT_OF_MEM;
+	}
+	if (orig_dur) traf->rsot->original_duration = orig_dur;
+	if (elapsed_dur) traf->rsot->elapsed_duration = elapsed_dur;
+	return GF_OK;
 }
 
 #if 0 //unused

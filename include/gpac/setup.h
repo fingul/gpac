@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2000-2023
+ *			Copyright (c) Telecom ParisTech 2000-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / general OS configuration file
@@ -413,6 +413,12 @@ typedef u8 bin128[16];
 #define GF_INT_MAX			INT_MAX
 /*! min possible value for s32*/
 #define GF_INT_MIN			INT_MIN
+/*! max possible value for u64*/
+#define GF_UINT64_MAX		ULLONG_MAX
+/*! max possible value for s64*/
+#define GF_INT64_MAX		LLONG_MAX
+/*! min possible value for s64*/
+#define GF_INT64_MIN		LLONG_MIN
 
 #ifndef MIN
 /*! get the smallest of two numbers*/
@@ -852,9 +858,18 @@ size_t gf_strlcpy(char *dst, const char *src, size_t dsize);
 #endif
 #else
 #ifndef GPAC_ENABLE_DEBUG
+/*! Macro for detecting debug configurations*/
 #define GPAC_ENABLE_DEBUG
 #endif
 #endif
+
+
+//! @cond Doxygen_Suppress
+/*needed for unittests (disabled)*/
+#ifndef GF_STATIC
+#define GF_STATIC static
+#endif
+//! @endcond
 
 #ifdef __cplusplus
 }

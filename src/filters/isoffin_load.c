@@ -156,6 +156,7 @@ static void isor_declare_track(ISOMReader *read, ISOMChannel *ch, u32 track, u32
 	Double track_dur=0;
 	u32 srd_id=0, srd_indep=0, srd_x=0, srd_y=0, srd_w=0, srd_h=0;
 	u32 base_tile_track=0;
+	u32 ch_layout=0;
 	Bool srd_full_frame=GF_FALSE;
 	u32 mtype, m_subtype;
 	GF_GenericSampleDescription *udesc = NULL;
@@ -423,6 +424,9 @@ static void isor_declare_track(ISOMReader *read, ISOMChannel *ch, u32 track, u32
 			codec_id = (m_subtype==GF_ISOM_SUBTYPE_AC3) ? GF_CODECID_AC3 : GF_CODECID_EAC3;
 			if (ac3cfg) {
 				gf_odf_ac3_cfg_write(ac3cfg, &dsi, &dsi_size);
+				if (!gf_sys_is_test_mode()) {
+					ch_layout = gf_ac3_get_channel_layout(ac3cfg);
+				}
 				gf_free(ac3cfg);
 			} else {
 				GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[IsoMedia] Track %d missing AC3/EC3 configuration !\n", track));
@@ -462,6 +466,11 @@ static void isor_declare_track(ISOMReader *read, ISOMChannel *ch, u32 track, u32
 			load_default = GF_TRUE;
 			break;
 
+		case GF_4CC('e','v','t','e'):
+			codec_id = m_subtype;
+			load_default = GF_TRUE;
+			break;
+
 		default:
 			codec_id = gf_codec_id_from_isobmf(m_subtype);
 			if (!codec_id || (codec_id==GF_CODECID_RAW)) {
@@ -492,8 +501,9 @@ static void isor_declare_track(ISOMReader *read, ISOMChannel *ch, u32 track, u32
 
 		if (load_default) {
 			if (!codec_id) {
-				GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[IsoMedia] Track %d type %s not natively handled\n", track, gf_4cc_to_str(m_subtype) ));
-
+				if (!read->allt || !read->alltk || !read->mov) {
+					GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[IsoMedia] Track %d type %s not natively handled\n", track, gf_4cc_to_str(m_subtype) ));
+				}
 				codec_id = m_subtype;
 			}
 			udesc = gf_isom_get_generic_sample_description(read->mov, track, stsd_idx);
@@ -1347,9 +1357,9 @@ props_done:
 					u64 lay = gf_audio_fmt_get_layout_from_cicp(layout.definedLayout);
 					gf_filter_pid_set_property(ch->pid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(lay));
 				}
-
+			} else if (ch_layout) {
+				gf_filter_pid_set_property(ch->pid, GF_PROP_PID_CHANNEL_LAYOUT, &PROP_LONGUINT(ch_layout));
 			}
-
 		}
 
 		if (first_config ) {
@@ -1681,10 +1691,18 @@ GF_Err isor_declare_objects(ISOMReader *read)
 		case GF_ISOM_MEDIA_TIMECODE:
 			streamtype = GF_STREAM_METADATA;
 			break;
-		/*hint tracks are never exported*/
+		/*hint tracks are never exported except when dumping from file*/
 		case GF_ISOM_MEDIA_HINT:
+			if (read->allt && read->alltk && read->mov) {
+				streamtype = GF_STREAM_METADATA;
+				break;
+			}
 			continue;
 		default:
+			if (read->allt && read->alltk && read->mov) {
+				streamtype = GF_STREAM_METADATA;
+				break;
+			}
 			if (!read->allt) {
 				GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[IsoMedia] Track %d type %s not supported, ignoring track - you may retry by specifying allt option\n", i+1, gf_4cc_to_str(mtype) ));
 				continue;

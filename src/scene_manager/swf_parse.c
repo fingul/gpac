@@ -322,7 +322,7 @@ static char *swf_get_string(SWFReader *read)
 	while (1) {
 		if (i>=read->size) {
 			read->ioerr = GF_NON_COMPLIANT_BITSTREAM;
-			name[read->size-1] = 0;
+			name[read->size ? read->size-1 : 0] = 0;
 			break;
 		}
 		name[i] = swf_read_int(read, 8);
@@ -1852,6 +1852,7 @@ static GF_Err swf_def_sound(SWFReader *read)
 		return gf_list_add(read->sounds, snd);
 	}
 	case 3:
+	default:
 		swf_report(read, GF_NOT_SUPPORTED, "Unrecognized sound format");
 		gf_free(snd);
 		break;
@@ -1972,7 +1973,7 @@ static GF_Err swf_soundstream_hdr(SWFReader *read)
 		read->sound_stream->szFileName = gf_strdup(szName);
 		read->setup_sound(read, read->sound_stream, 0);
 		break;
-	case 3:
+	default:
 		swf_report(read, GF_NOT_SUPPORTED, "Unrecognized sound format");
 		gf_free(snd);
 		break;
@@ -2024,6 +2025,10 @@ static GF_Err swf_soundstream_block(SWFReader *read)
 		bytes[3] = swf_read_int(read, 8);
 		hdr = GF_4CC(bytes[0], bytes[1], bytes[2], bytes[3]);
 		size = gf_mp3_frame_size(hdr);
+		if (!size) {
+			e = GF_ISOM_INVALID_MEDIA;
+			break;
+		}
 		if (alloc_size<size-4) {
 			frame = (char*)gf_realloc(frame, sizeof(char)*(size-4));
 			alloc_size = size-4;
@@ -2118,7 +2123,7 @@ static GF_Err swf_def_bits_jpeg(SWFReader *read, u32 version)
 				break;
 			}
 		}
-		if ((buf[0]==0xFF) && (buf[1]==0xD8) && (buf[2]==0xFF) && (buf[3]==0xD8)) {
+		if ((size>3) && (buf[0]==0xFF) && (buf[1]==0xD8) && (buf[2]==0xFF) && (buf[3]==0xD8)) {
 			skip = 2;
 		}
 		if (version==2) {
@@ -2492,7 +2497,7 @@ GF_Err gf_sm_load_run_swf(GF_SceneLoader *load)
 
 	if (e==GF_EOS) {
 		if (read->finalize)
-			read->finalize(read);
+			read->finalize(read, GF_FALSE);
 		e = GF_OK;
 	}
 	if (!e) {
@@ -2512,6 +2517,10 @@ void gf_swf_reader_del(SWFReader *read)
 	if (!read) return;
 	gf_bs_del(read->bs);
 	if (read->mem) gf_free(read->mem);
+
+	if (read->finalize) {
+		read->finalize(read, GF_TRUE);
+	}
 
 	while (gf_list_count(read->display_list)) {
 		DispShape *s = (DispShape *)gf_list_get(read->display_list, 0);
@@ -2543,6 +2552,7 @@ void gf_swf_reader_del(SWFReader *read)
 
 	if (read->jpeg_hdr) gf_free(read->jpeg_hdr);
 	if (read->localPath) gf_free(read->localPath);
+
 	gf_fclose(read->input);
 	gf_free(read->inputName);
 	gf_free(read);

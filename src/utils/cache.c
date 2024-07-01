@@ -2,7 +2,7 @@
  *					GPAC Multimedia Framework
  *
  *			Authors: Jean Le Feuvre, Pierre Souchay
- *			Copyright (c) Telecom ParisTech 2010-2023
+ *			Copyright (c) Telecom ParisTech 2010-2024
  *					All rights reserved
  *
  *   This file is part of GPAC / common tools sub-project
@@ -995,35 +995,48 @@ u32 gf_cache_get_downtime(const DownloadedCacheEntry entry)
 	if (!entry) return 0;
 	return entry->downtime;
 }
-Bool gf_cache_is_done(const DownloadedCacheEntry entry)
+u32 gf_cache_is_done(const DownloadedCacheEntry entry)
 {
-    Bool res = GF_TRUE;
+    u32 res = 1;
     if (entry && entry->external_blob) {
         gf_mx_p(entry->external_blob->mx);
-        res = (entry->external_blob->flags & GF_BLOB_IN_TRANSFER) ? GF_FALSE : GF_TRUE;
+        res = (entry->external_blob->flags & GF_BLOB_IN_TRANSFER) ? 0 : 1;
+        if (res && (entry->external_blob->flags & GF_BLOB_CORRUPTED))
+			res = 2;
         gf_mx_v(entry->external_blob->mx);
     } else if (entry) {
-        res = (entry->cache_blob.flags & GF_BLOB_IN_TRANSFER) ? GF_FALSE : GF_TRUE;
+        res = (entry->cache_blob.flags & GF_BLOB_IN_TRANSFER) ? 0 : 1;
     }
     return res;
 }
-const u8 *gf_cache_get_content(const DownloadedCacheEntry entry, u32 *size)
+const u8 *gf_cache_get_content(const DownloadedCacheEntry entry, u32 *size, u32 *max_valid_size, Bool *was_modified)
 {
     if (!entry) return NULL;
+	*was_modified = GF_FALSE;
     if (entry->external_blob) {
         u8 *data;
-       GF_Err  e = gf_blob_get(entry->cache_filename, &data, size, NULL);
+		GF_Err e = gf_blob_get_ex(entry->external_blob, &data, size, NULL);
         if (e) return NULL;
+        *max_valid_size = *size;
+		if (entry->external_blob->range_valid) {
+			gf_mx_p(entry->external_blob->mx);
+			entry->external_blob->range_valid(entry->external_blob, 0, max_valid_size);
+			gf_mx_v(entry->external_blob->mx);
+		}
+		if (entry->external_blob->last_modification_time != entry->cache_blob.last_modification_time) {
+			*was_modified = GF_TRUE;
+			entry->cache_blob.last_modification_time = entry->external_blob->last_modification_time;
+		}
         return data;
     }
-    *size = entry->cache_blob.size;
+    *max_valid_size = *size = entry->cache_blob.size;
     return entry->cache_blob.data;
 }
 void gf_cache_release_content(const DownloadedCacheEntry entry)
 {
     if (!entry) return;
     if (!entry->external_blob) return;
-    gf_blob_release(entry->cache_filename);
+    gf_blob_release_ex(entry->external_blob);
 }
 Bool gf_cache_is_deleted(const DownloadedCacheEntry entry)
 {

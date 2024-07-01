@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2017-2023
+ *			Copyright (c) Telecom ParisTech 2017-2024
  *					All rights reserved
  *
  *  This file is part of GPAC / HTTP input filter using GPAC http stack
@@ -106,9 +106,8 @@ static GF_Err httpin_initialize(GF_Filter *filter)
 
 	if (!ctx || !ctx->src) return GF_BAD_PARAM;
 	ctx->dm = gf_filter_get_download_manager(filter);
-#ifndef GPAC_CONFIG_EMSCRIPTEN
 	if (!ctx->dm) return GF_SERVICE_ERROR;
-#endif
+
 	ctx->block = gf_malloc(ctx->block_size +1);
 
 	flags = GF_NETIO_SESSION_NOT_THREADED | GF_NETIO_SESSION_PERSISTENT;
@@ -135,7 +134,7 @@ static GF_Err httpin_initialize(GF_Filter *filter)
 
 	server = strstr(ctx->src, "://");
 	if (server) server += 3;
-	if (server && strstr(server, "://")) {
+	if (server && strncmp(ctx->src, "http://gmcast", 13) && strstr(server, "://")) {
 		ctx->is_end = GF_TRUE;
 		return gf_filter_pid_raw_new(filter, server, server, NULL, NULL, NULL, 0, GF_FALSE, &ctx->pid);
 	}
@@ -181,11 +180,23 @@ void httpin_finalize(GF_Filter *filter)
 	if (ctx->cached) gf_fclose(ctx->cached);
 }
 
+#ifndef GPAC_DISABLE_NETWORK
+Bool gf_dm_can_handle_url(const char *url);
+#endif
 static GF_FilterProbeScore httpin_probe_url(const char *url, const char *mime_type)
 {
 	if (!strnicmp(url, "http://", 7) ) return GF_FPROBE_SUPPORTED;
 	if (!strnicmp(url, "https://", 8) ) return GF_FPROBE_SUPPORTED;
 	if (!strnicmp(url, "gmem://", 7) ) return GF_FPROBE_SUPPORTED;
+
+#ifndef GPAC_DISABLE_NETWORK
+	if (!strnicmp(url, "file://", 7) ) return GF_FPROBE_NOT_SUPPORTED;
+	//libcurl handling of RTSP has lower priority
+	if (!strnicmp(url, "rtsp://", 7) ) return GF_FPROBE_MAYBE_SUPPORTED;
+	if (gf_dm_can_handle_url(url))
+		return GF_FPROBE_SUPPORTED;
+#endif
+
 	return GF_FPROBE_NOT_SUPPORTED;
 }
 
@@ -498,18 +509,18 @@ static GF_Err httpin_process(GF_Filter *filter)
 		}
 		gf_dm_sess_get_stats(ctx->sess, NULL, NULL, &total_size, &bytes_done, &bytes_per_sec, &net_status);
 
-		//wait until we have some data to declare the pid
-        if ((e!= GF_EOS) && !nb_read) {
-            gf_filter_ask_rt_reschedule(filter, 1000);
-            return GF_OK;
-        }
-
 		if (!ctx->pid || ctx->do_reconfigure) {
 			u32 idx;
 			GF_Err cfg_e;
-			const char *hname, *hval;
-			const char *cached = gf_dm_sess_get_cache_name(ctx->sess);
+			const char *hname, *hval, *cached;
 
+			//wait until we have some data to declare the pid
+			if ((e!= GF_EOS) && !nb_read) {
+				gf_filter_ask_rt_reschedule(filter, 1000);
+				return GF_OK;
+			}
+
+			cached = gf_dm_sess_get_cache_name(ctx->sess);
 			ctx->do_reconfigure = GF_FALSE;
 
 			if ((e==GF_EOS) && cached) {
@@ -567,9 +578,10 @@ static GF_Err httpin_process(GF_Filter *filter)
 			gf_filter_pid_set_info(ctx->pid, GF_PROP_PID_DOWN_SIZE, &PROP_LONGUINT(ctx->file_size ? ctx->file_size : bytes_done) );
 		}
 	}
-
 	byte_offset = ctx->nb_read;
 
+	//nb_read may be 0 and error = GF_OK to signal data has been patched somewhere on the reception buffer but not in a contiguous area since last fetch
+	//we send empty packets in this case for filters using the underlying cache object directly (eg isobmf demux)
 	ctx->nb_read += nb_read;
 	if (ctx->file_size && (ctx->nb_read==ctx->file_size)) {
 		if (net_status!=GF_NETIO_DATA_EXCHANGE)
@@ -651,7 +663,9 @@ GF_FilterRegister HTTPInRegister = {
 	"\n"
 	"Note: Unless disabled at session level (see [-no-probe](CORE) ), file extensions are usually ignored and format probing is done on the first data block.")
 	.private_size = sizeof(GF_HTTPInCtx),
-	.flags = GF_FS_REG_USE_SYNC_READ,
+#ifdef GPAC_CONFIG_EMSCRIPTEN
+	.flags = GF_FS_REG_MAIN_THREAD,
+#endif
 	.args = HTTPInArgs,
 	SETCAPS(HTTPInCaps),
 	.initialize = httpin_initialize,
@@ -662,11 +676,74 @@ GF_FilterRegister HTTPInRegister = {
 };
 
 
+#ifdef GPAC_HAS_CURL
+#include <curl/curl.h>
+
+
+static void httpin_reg_free(GF_FilterSession *session, struct __gf_filter_register *freg)
+{
+	gf_free((char*)freg->help);
+}
+
+#endif
+
 const GF_FilterRegister *httpin_register(GF_FilterSession *session)
 {
 	if (gf_opts_get_bool("temp", "get_proto_schemes")) {
-		gf_opts_set_key("temp_in_proto", HTTPInRegister.name, "http,https,gmem");
+		char *all_protos = gf_strdup("http,https,gmem");
+#ifdef GPAC_HAS_CURL
+		curl_version_info_data *ver = curl_version_info(CURLVERSION_NOW);
+		u32 i=0;
+		while (ver && ver->protocols[i]) {
+			if (!strcmp(ver->protocols[i], "file")) {}
+			else if (!strcmp(ver->protocols[i], "http")) {}
+			else if (!strcmp(ver->protocols[i], "https")) {}
+			else {
+				gf_dynstrcat(&all_protos, ver->protocols[i], ",");
+			}
+			i++;
+		}
+#endif
+		gf_opts_set_key("temp_in_proto", HTTPInRegister.name, all_protos);
+		gf_free(all_protos);
 	}
+
+
+#ifdef GPAC_HAS_CURL
+	if (!gf_opts_get_bool("temp", "helpexpert"))
+		return &HTTPInRegister;
+
+	char *help = gf_strdup(HTTPInRegister.help);
+	gf_dynstrcat(&help, "\n## libCURL Support\n", NULL);
+	gf_dynstrcat(&help, "This build supports using libcurl for HTTP and other protocol downloads."\
+		" For http(s), the default behaviour is to use GPAC and can be overriden using the option [-curl](core).\n", NULL);
+	gf_dynstrcat(&help, "Session parameters can be set using the `curl` configuration section, eg `-cfg=curl:FTPPORT=222`.\n", NULL);
+	gf_dynstrcat(&help, "The key `curl:trace=yes` can be set to log all CURL activity using logs `http@debug`.\n\n", NULL);
+	gf_dynstrcat(&help, "Libcurl version: ", NULL);
+	curl_version_info_data *ver = curl_version_info(CURLVERSION_NOW);
+	gf_dynstrcat(&help, ver->version, NULL);
+	gf_dynstrcat(&help, "\nLibcurl options (name and value type):\n", NULL);
+	const struct curl_easyoption *opt = curl_easy_option_next(NULL);
+	while (opt) {
+		const char *otype=NULL;
+		switch (opt->type) {
+		case CURLOT_LONG: otype = "int"; break;
+		case CURLOT_VALUES: otype = "unsigned int"; break;
+		case CURLOT_OFF_T: otype = "unsigned long long"; break;
+		case CURLOT_STRING: otype = "string"; break;
+		default: break;
+		}
+		if (otype) {
+			gf_dynstrcat(&help, opt->name, "- ");
+			gf_dynstrcat(&help, otype, ": ");
+			gf_dynstrcat(&help, "\n", NULL);
+		}
+		opt = curl_easy_option_next(opt);
+	}
+	HTTPInRegister.help = help;
+	HTTPInRegister.register_free = httpin_reg_free;
+#endif
+
 	return &HTTPInRegister;
 }
 #else

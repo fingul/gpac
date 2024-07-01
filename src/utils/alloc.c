@@ -629,8 +629,12 @@ static unsigned int gf_memory_del_item(memory_list *p, void *ptr)
 	gf_fatal_assert(*p);
 	hash = gf_memory_hash(ptr);
 	sub_list = &((*p)[hash]);
-	if (!sub_list) return 0;
+	//code does nothing as &((*p)[hash]) always evaluates to true - commenting it
+//	if (!sub_list) return 0;
 	ret = gf_memory_del_item_stack(sub_list, ptr);
+
+	//code does nothing as &((*p)[i]) always evaluates to true - commenting it
+#if 0
 	if (ret && !((*p)[hash])) {
 		/*check for deletion*/
 		int i;
@@ -640,6 +644,7 @@ static unsigned int gf_memory_del_item(memory_list *p, void *ptr)
 			FREE(*p);
 		}
 	}
+#endif
 	return ret;
 }
 
@@ -869,7 +874,7 @@ void gf_memory_print()
 		for (i=0; i<HASH_ENTRIES; i++) {
 			memory_element *curr_element = memory_add[i], *next_element;
 			while (curr_element) {
-				char szVal[51];
+				char szVal[51], *sep;
 				char szHexVal[101];
 				u32 size, j;
 				next_element = curr_element->next;
@@ -880,6 +885,8 @@ void gf_memory_print()
 					sprintf(szHexVal+2*j, "%02X", byte);
 				}
 				szVal[size] = 0;
+				sep = strchr(szVal, '%');
+				if (sep) sep[0] = 0;
 				szHexVal[2*size] = 0;
 				gf_memory_log(GF_MEMORY_INFO, "[MemTracker] Memory Block %p (size %d) allocated in:\n", curr_element->ptr, curr_element->size);
 				log_backtrace(GF_MEMORY_INFO, curr_element);

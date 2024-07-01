@@ -1231,28 +1231,39 @@ static JSValue jsf_filter_set_cap(JSContext *ctx, JSValueConst this_val, int arg
 
 	}
 
+	u32 flags = 0;
+	if (prop_id) {
+		flags = GF_CAPFLAG_IN_BUNDLE;
+		if (is_inputoutput) {
+			flags |= GF_CAPFLAG_INPUT|GF_CAPFLAG_OUTPUT;
+		} else if (is_output) {
+			flags |= GF_CAPFLAG_OUTPUT;
+		} else {
+			flags |= GF_CAPFLAG_INPUT;
+		}
+		if (is_excluded)
+			flags |= GF_CAPFLAG_EXCLUDED;
+		if (is_static)
+			flags |= GF_CAPFLAG_STATIC;
+		if (is_loaded_filter_only)
+			flags |= GF_CAPFLAG_LOADED_FILTER;
+		if (is_optional)
+			flags |= GF_CAPFLAG_OPTIONAL;
+	}
+
+	if (jsf->filter->freg->flags & GF_FS_REG_CUSTOM) {
+		GF_Err e = gf_filter_push_caps(jsf->filter, prop_id, &p, NULL, flags, 0);
+		if (e) return GF_JS_EXCEPTION(ctx);
+		return JS_UNDEFINED;
+	}
+
 	jsf->caps = gf_realloc(jsf->caps, sizeof(GF_FilterCapability)*(jsf->nb_caps+1));
 	memset(&jsf->caps[jsf->nb_caps], 0, sizeof(GF_FilterCapability));
 	if (prop_id) {
 		GF_FilterCapability *cap = &jsf->caps[jsf->nb_caps];
 		cap->code = prop_id;
 		cap->val = p;
-		cap->flags = GF_CAPFLAG_IN_BUNDLE;
-		if (is_inputoutput) {
-			cap->flags |= GF_CAPFLAG_INPUT|GF_CAPFLAG_OUTPUT;
-		} else if (is_output) {
-			cap->flags |= GF_CAPFLAG_OUTPUT;
-		} else {
-			cap->flags |= GF_CAPFLAG_INPUT;
-		}
-		if (is_excluded)
-			cap->flags |= GF_CAPFLAG_EXCLUDED;
-		if (is_static)
-			cap->flags |= GF_CAPFLAG_STATIC;
-		if (is_loaded_filter_only)
-			cap->flags |= GF_CAPFLAG_LOADED_FILTER;
-		if (is_optional)
-			cap->flags |= GF_CAPFLAG_OPTIONAL;
+		cap->flags = flags;
 	}
 	jsf->nb_caps ++;
 	gf_filter_override_caps(jsf->filter, jsf->caps, jsf->nb_caps);
@@ -1342,7 +1353,7 @@ static JSValue jsf_filter_new_pid(JSContext *ctx, JSValueConst this_val, int arg
 	pctx->jsf = jsf;
 	pctx->pid = opid;
 	pctx->jsobj = JS_NewObjectClass(ctx, jsf_pid_class_id);
-	//keep ref to value we destroy it upon pid removal or filter desctruction
+	//keep ref to value we destroy it upon pid removal or filter destruction
 	pctx->jsobj = JS_DupValue(ctx, pctx->jsobj);
 	JS_SetOpaque(pctx->jsobj, pctx);
 	gf_filter_pid_set_udta(pctx->pid, pctx);
@@ -2256,7 +2267,7 @@ static JSValue jsf_pid_get_packet(JSContext *ctx, JSValueConst this_val, int arg
     if (!pctx) return GF_JS_EXCEPTION(ctx);
 	if (!pctx->jsf->filter->in_process)
 		return js_throw_err_msg(ctx, GF_BAD_PARAM, "Filter %s attempt to query packet outside process callback not allowed!\n", pctx->jsf->filter->name);
-		
+
     pck = gf_filter_pid_get_packet(pctx->pid);
 	if (!pck) return JS_NULL;
 
@@ -2905,6 +2916,31 @@ static JSValue jsf_pid_forward(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
+static JSValue jsf_pid_match_source(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+	JSValue ret = JS_FALSE;
+	GF_JSPidCtx *pctx = JS_GetOpaque(this_val, jsf_pid_class_id);
+    if (!pctx || !argc) return GF_JS_EXCEPTION(ctx);
+    if (pctx->pid == pctx->pid->pid) return GF_JS_EXCEPTION(ctx);
+    const char *src_id = JS_ToCString(ctx, argv[0]);
+    if (!src_id)
+		return ret;
+	const char *sid = src_id;
+	if (!strncmp(src_id, "ipid://", 7)) sid+=7;
+
+
+	Bool pid_excluded, needs_clone;
+	if (filter_source_id_match(pctx->pid, pctx->pid->pid->filter->id, NULL, &pid_excluded, &needs_clone, sid)) {
+		ret = JS_TRUE;
+	} else {
+		const char *src_filter_id = gf_filter_last_id_in_chain(pctx->pid->pid->filter, GF_TRUE);
+		if (src_filter_id && filter_source_id_match(pctx->pid, src_filter_id, NULL, &pid_excluded, &needs_clone, sid)) {
+			ret = JS_TRUE;
+		}
+	}
+	JS_FreeCString(ctx, src_id);
+    return ret;
+}
 
 static const JSCFunctionListEntry jsf_pid_funcs[] = {
     JS_CGETSET_MAGIC_DEF("name", jsf_pid_get_prop, jsf_pid_set_prop, JSF_PID_NAME),
@@ -2962,6 +2998,7 @@ static const JSCFunctionListEntry jsf_pid_funcs[] = {
     JS_CFUNC_DEF("forward", 0, jsf_pid_forward),
     JS_CFUNC_DEF("negotiate_prop", 0, jsf_pid_negotiate_prop),
     JS_CFUNC_DEF("ignore_blocking", 0, jsf_pid_ignore_blocking),
+    JS_CFUNC_DEF("match_source", 0, jsf_pid_match_source),
 };
 
 enum
@@ -4403,7 +4440,7 @@ static GF_Err jsfilter_configure_pid(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	if (!pctx) {
 		GF_SAFEALLOC(pctx, GF_JSPidCtx);
 		if (!pctx) return GF_OUT_OF_MEM;
-		
+
 		pctx->jsf = jsf;
 		pctx->pid = pid;
 		pctx->jsobj = JS_NewObjectClass(jsf->ctx, jsf_pid_class_id);
@@ -4477,7 +4514,7 @@ void js_load_constants(JSContext *ctx, JSValue global_obj)
 	DEF_CONST(GF_PROP_CICP_COL_PRIM)
 	DEF_CONST(GF_PROP_CICP_COL_TFC)
 	DEF_CONST(GF_PROP_CICP_COL_MX)
-
+	DEF_CONST(GF_PROP_CICP_LAYOUT)
 
 	DEF_CONST(GF_FEVT_PLAY)
 	DEF_CONST(GF_FEVT_SET_SPEED)
@@ -5236,7 +5273,7 @@ GF_FilterRegister JSFilterRegister = {
 	GF_FS_SET_DESCRIPTION("JavaScript filter")
 	GF_FS_SET_HELP("This filter runs a javascript file specified in [-js]() defining a new JavaScript filter.\n"
 	"  \n"
-	"For more information on how to use JS filters, please check https://wiki.gpac.io/jsfilter\n")
+	"For more information on how to use JS filters, please check https://wiki.gpac.io/Howtos/jsf/jsfilter\n")
 	.private_size = sizeof(GF_JSFilterCtx),
 	.flags = GF_FS_REG_SCRIPT | GF_FS_REG_TEMP_INIT,
 	.args = JSFilterArgs,
@@ -5271,8 +5308,8 @@ JSValue jsfilter_initialize_custom(GF_Filter *filter, JSContext *ctx)
 	((GF_FilterRegister *) filter->freg)->process_event = jsfilter_process_event;
 //	((GF_FilterRegister *) filter->freg)->reconfigure_output = jsfilter_reconfigure_output;
 //	((GF_FilterRegister *) filter->freg)->probe_data = jsfilter_probe_data;
-	//signal reg is script, so we don't free the filter reg caps as with custom filters
-	((GF_FilterRegister *) filter->freg)->flags |= GF_FS_REG_SCRIPT;
+
+	//do NOT signal reg is script, only custom (done by caller)
 	return JS_DupValue(ctx, jsf->filter_obj);
 }
 
@@ -5291,4 +5328,3 @@ const GF_FilterRegister *jsf_register(GF_FilterSession *session)
 }
 
 #endif
-

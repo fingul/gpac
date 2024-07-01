@@ -188,9 +188,11 @@ REG_DEC(ttml2vtt)
 REG_DEC(ttml2srt)
 REG_DEC(unframer)
 REG_DEC(writeuf)
+REG_DEC(ttmlmerge)
 REG_DEC(ghidmx)
 REG_DEC(evgs)
 REG_DEC(ccdec)
+REG_DEC(scte35dec)
 REG_DEC(mpeghdec)
 
 typedef const GF_FilterRegister *(*filter_reg_fun)(GF_FilterSession *session);
@@ -345,10 +347,12 @@ BuiltinReg BuiltinFilters [] = {
 	REG_IT(oggmx),
 	REG_IT(unframer),
 	REG_IT(writeuf),
+	REG_IT(ttmlmerge),
 	REG_IT(uncvdec),
 	REG_IT(ghidmx),
 	REG_IT(evgs),
 	REG_IT(ccdec),
+	REG_IT(scte35dec),
 
 #if defined(GPAC_CONFIG_EMSCRIPTEN)
 	REG_IT(wcdec),

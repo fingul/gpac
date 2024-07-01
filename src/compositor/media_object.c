@@ -382,10 +382,12 @@ void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged)
 		}
 
 		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SAR);
-		if (v) {
+		if (v && (v->value.frac.num>0)) {
 			u32 n_par = (v->value.frac.num) << 16 | (v->value.frac.den);
 			if (mo->pixel_ar && (mo->pixel_ar!=n_par)) changed = GF_TRUE;
 			mo->pixel_ar = n_par;
+		} else {
+			mo->pixel_ar = 0;
 		}
 
 		v = gf_filter_pid_get_property(mo->odm->pid, GF_PROP_PID_SRD);
@@ -480,7 +482,7 @@ void gf_mo_update_caps_ex(GF_MediaObject *mo, Bool check_unchanged)
 		evt.type = GF_EVENT_QUALITY_SWITCHED;
 		gf_sc_send_event(scene->compositor, &evt);
 	} else if (check_unchanged) {
-		//reset config changed if nothing changed, this avoid resetting up texture or mixer input
+		//reset config changed if nothing changed, this avoids resetting up texture or mixer input
 		mo->config_changed = GF_FALSE;
 	}
 }
